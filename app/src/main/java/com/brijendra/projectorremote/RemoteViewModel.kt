@@ -448,6 +448,16 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
         loadApps()
     }
 
+    fun clearData(app: TvApp) = tool("app") {
+        val out = remote.shellOutput("pm clear ${app.pkg}")
+        _state.update {
+            it.copy(message = if (out.contains("Success")) "${app.label} reset — open it and sign in again"
+            else "Couldn't reset ${app.label}")
+        }
+    }
+
+    fun launchApp(app: TvApp) = launch(app)
+
     fun clearAppCache(app: TvApp) = tool("app") {
         val out = remote.shellOutput("pm clear --cache-only ${app.pkg}")
         if (out.contains("Error") || out.contains("Unknown")) error("This projector can't clear one app's cache. Use Free memory instead.")

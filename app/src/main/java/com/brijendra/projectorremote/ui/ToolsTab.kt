@@ -6,6 +6,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -278,14 +279,15 @@ private fun ToolTile(
 
 @Composable
 private fun AppManager(vm: RemoteViewModel, s: UiState, onClose: () -> Unit) {
-    var confirm by remember { mutableStateOf<TvApp?>(null) }
+    var selected by remember { mutableStateOf<TvApp?>(null) }
+    var confirm by remember { mutableStateOf<Pair<TvApp, String>?>(null) }
     Column(Modifier.fillMaxSize()) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 12.dp)) {
             IconKey(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClose, size = 44.dp, tint = TextDim)
             HSpace(12)
             Column {
                 Text("App manager", color = TextHi, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-                Text("Stop, clear cache or uninstall", color = TextDim, fontSize = 12.sp)
+                Text("Tap an app for options", color = TextDim, fontSize = 12.sp)
             }
         }
         LazyColumn(
@@ -293,59 +295,98 @@ private fun AppManager(vm: RemoteViewModel, s: UiState, onClose: () -> Unit) {
             contentPadding = PaddingValues(bottom = 16.dp)
         ) {
             items(s.apps, key = { it.pkg }) { app ->
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(Glass)
-                        .border(1.dp, Stroke.copy(alpha = 0.6f), RoundedCornerShape(18.dp))
-                        .padding(10.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                PressSurface(
+                    { selected = app },
+                    Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp),
+                    background = SolidColor(Glass)
                 ) {
-                    Box(
+                    Row(
                         Modifier
-                            .size(42.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(GlassHi),
-                        contentAlignment = Alignment.Center
+                            .fillMaxWidth()
+                            .padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        RemoteImage(app.iconUrl, Modifier.size(30.dp)) { LetterBadge(app.label, 30.dp) }
+                        Box(
+                            Modifier
+                                .size(42.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(GlassHi),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            RemoteImage(app.iconUrl, Modifier.size(30.dp)) { LetterBadge(app.label, 30.dp) }
+                        }
+                        HSpace(12)
+                        Column(Modifier.weight(1f)) {
+                            Text(app.label, color = TextHi, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(app.pkg, color = TextFaint, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                     }
-                    HSpace(12)
-                    Column(Modifier.weight(1f)) {
-                        Text(app.label, color = TextHi, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(app.pkg, color = TextFaint, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    IconKey(Icons.Rounded.StopCircle, "Force stop", { vm.forceStop(app) }, size = 38.dp, tint = TextDim,
-                        background = SolidColor(Color.Transparent))
-                    IconKey(Icons.Rounded.CleaningServices, "Clear cache", { vm.clearAppCache(app) }, size = 38.dp, tint = TextDim,
-                        background = SolidColor(Color.Transparent))
-                    IconKey(Icons.Rounded.Delete, "Uninstall", { confirm = app }, size = 38.dp, tint = Rose,
-                        background = SolidColor(Color.Transparent))
                 }
             }
         }
     }
-    confirm?.let { app ->
+
+    selected?.let { app ->
+        AlertDialog(
+            onDismissRequest = { selected = null },
+            containerColor = Glass,
+            title = { Text(app.label, color = TextHi) },
+            text = {
+                Column {
+                    ActionRow("Open") { vm.launchApp(app); selected = null }
+                    ActionRow("Force stop") { vm.forceStop(app); selected = null }
+                    ActionRow("Clear cache") { vm.clearAppCache(app); selected = null }
+                    ActionRow("Update in Play Store") { vm.openPlayStore(app.pkg); selected = null }
+                    ActionRow("Reset app (clear data)", Amber) { confirm = app to "reset"; selected = null }
+                    ActionRow("Uninstall", Rose) { confirm = app to "uninstall"; selected = null }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { selected = null }) { Text("Close", color = TextDim) }
+            }
+        )
+    }
+
+    confirm?.let { (app, action) ->
+        val reset = action == "reset"
         AlertDialog(
             onDismissRequest = { confirm = null },
             containerColor = Glass,
-            title = { Text("Uninstall ${app.label}?", color = TextHi) },
+            title = { Text(if (reset) "Reset ${app.label}?" else "Uninstall ${app.label}?", color = TextHi) },
             text = {
                 Text(
-                    "Preinstalled apps are only hidden and can be brought back with Tools → Restore apps. " +
+                    if (reset) "Clears the app's data, like a fresh install. You'll need to sign in again."
+                    else "Preinstalled apps are only hidden and can be brought back with Tools → Restore apps. " +
                         "Apps you installed yourself are removed completely.",
                     color = TextDim
                 )
             },
             confirmButton = {
-                TextButton(onClick = { vm.uninstall(app); confirm = null }) { Text("Uninstall", color = Rose) }
+                TextButton(onClick = {
+                    if (reset) vm.clearData(app) else vm.uninstall(app)
+                    confirm = null
+                }) { Text(if (reset) "Reset" else "Uninstall", color = if (reset) Amber else Rose) }
             },
             dismissButton = {
                 TextButton(onClick = { confirm = null }) { Text("Cancel", color = TextHi) }
             }
         )
     }
+}
+
+@Composable
+private fun ActionRow(label: String, color: Color = TextHi, onClick: () -> Unit) {
+    Text(
+        label,
+        color = color,
+        fontSize = 15.sp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp, horizontal = 4.dp)
+    )
 }
 
 @Composable

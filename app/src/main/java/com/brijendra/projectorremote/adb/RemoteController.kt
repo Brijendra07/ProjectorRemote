@@ -2,12 +2,17 @@ package com.brijendra.projectorremote.adb
 
 import android.content.Context
 import io.github.muntashirakon.adb.AdbStream
-import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.OutputStream
-import java.util.concurrent.Executors
 import kotlin.concurrent.thread
 
 /** A launchable app on the projector. */
@@ -27,7 +32,30 @@ class RemoteController private constructor(context: Context) {
 
     private val appContext = context.applicationContext
     private val manager by lazy { AdbConnectionManager.get(appContext) }
-    private val io = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+    /** One command at a time. */
+    private val opLock = Mutex()
+    private val watchdogScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    /**
+     * Runs a blocking ADB call with a watchdog. If the projector stops answering
+     * (restarted, Wi-Fi dropped), the connection is torn down so nothing stays frozen.
+     */
+    private suspend fun <T> op(timeoutMs: Long = 10_000, block: () -> T): T = opLock.withLock {
+        val dog = watchdogScope.launch {
+            delay(timeoutMs)
+            hardReset()
+        }
+        try {
+            withContext(Dispatchers.IO) { block() }
+        } finally {
+            dog.cancel()
+        }
+    }
+
+    private fun hardReset() {
+        resetShell()
+        try { manager.disconnect() } catch (_: Throwable) {}
+    }
 
     private var shell: AdbStream? = null
     private var shellOut: OutputStream? = null
@@ -36,13 +64,15 @@ class RemoteController private constructor(context: Context) {
         get() = try { manager.isConnected } catch (_: Throwable) { false }
 
     /** One-time pairing using the 6-digit code shown on the projector. */
-    suspend fun pair(host: String, port: Int, code: String): Boolean = withContext(io) {
+    suspend fun pair(host: String, port: Int, code: String): Boolean = op(20_000) {
         manager.pair(host, port, code)
     }
 
     /** Connect to host:port. If port is null, find the projector automatically on Wi-Fi. */
-    suspend fun connect(host: String, port: Int?): Boolean = withContext(io) {
+    suspend fun connect(host: String, port: Int?): Boolean = op(12_000) {
         resetShell()
+        // Drop any stale connection (e.g. projector restarted) before connecting again.
+        if (manager.isConnected) try { manager.disconnect() } catch (_: Throwable) {}
         if (port != null) {
             manager.setHostAddress(host)
             manager.connect(host, port)
@@ -52,20 +82,22 @@ class RemoteController private constructor(context: Context) {
     }
 
     /** Find the projector automatically (mDNS). Useful after the projector reboots and the port changes. */
-    suspend fun autoConnect(): Boolean = withContext(io) {
+    suspend fun autoConnect(): Boolean = op(12_000) {
         resetShell()
+        if (manager.isConnected) try { manager.disconnect() } catch (_: Throwable) {}
         manager.autoConnect(appContext, 6_000)
     }
 
-    suspend fun disconnect() = withContext(io) {
+    suspend fun disconnect() = op(5_000) {
         resetShell()
         try { manager.disconnect() } catch (_: Throwable) {}
     }
 
     /** Throws if the connection is gone. */
-    suspend fun ping() = withContext(io) {
+    suspend fun ping() = op(5_000) {
         if (!manager.isConnected) throw IOException("not connected")
-        writeLine("true")
+        // A real round trip: a dead connection can't answer, and the watchdog resets it.
+        if (!exec("echo ok").contains("ok")) throw IOException("no answer")
     }
 
     suspend fun key(keyCode: Int) = run("input keyevent $keyCode")
@@ -87,7 +119,7 @@ class RemoteController private constructor(context: Context) {
         else run("monkey -p ${app.pkg} -c android.intent.category.LEANBACK_LAUNCHER 1 || monkey -p ${app.pkg} 1")
 
     /** Lists apps that appear on the projector's home screen. */
-    suspend fun listApps(): List<TvApp> = withContext(io) {
+    suspend fun listApps(): List<TvApp> = op(20_000) {
         val out = exec(
             "cmd package query-activities --brief -a android.intent.action.MAIN " +
                 "-c android.intent.category.LEANBACK_LAUNCHER; " +
@@ -107,10 +139,10 @@ class RemoteController private constructor(context: Context) {
     }
 
     /** Runs one shell command and returns its output. */
-    suspend fun shellOutput(cmd: String): String = withContext(io) { exec(cmd) }
+    suspend fun shellOutput(cmd: String): String = op(30_000) { exec(cmd) }
 
     /** Installs an APK on the projector over the ADB connection (like `adb install`). */
-    suspend fun installApk(apk: ByteArray): String = withContext(io) {
+    suspend fun installApk(apk: ByteArray): String = op(240_000) {
         val stream = manager.openStream("exec:cmd package install -r -S ${apk.size}")
         val result = ByteArrayOutputStream()
         try {
@@ -136,7 +168,7 @@ class RemoteController private constructor(context: Context) {
     }
 
     /** Runs a command through a persistent shell (fast, no output). */
-    private suspend fun run(cmd: String) = withContext(io) {
+    private suspend fun run(cmd: String) = op(8_000) {
         try {
             writeLine(cmd)
         } catch (e: IOException) {
@@ -192,7 +224,7 @@ class RemoteController private constructor(context: Context) {
     }
 
     /** Runs a command without a shell and returns raw bytes (e.g. screencap). */
-    suspend fun execBytes(cmd: String): ByteArray = withContext(io) {
+    suspend fun execBytes(cmd: String): ByteArray = op(20_000) {
         val stream = manager.openStream("exec:$cmd")
         val bytes = ByteArrayOutputStream()
         try {

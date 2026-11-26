@@ -4,6 +4,7 @@ import android.content.Context
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Finds and connects to the projector. Shared by the app screen, share sheet,
@@ -41,7 +42,10 @@ object Connector {
     /**
      * One attempt: saved IP:port → helper on saved IP → (full) mDNS → (full) Wi-Fi scan.
      */
-    suspend fun attempt(ctx: Context, full: Boolean): Boolean = lock.withLock {
+    suspend fun attempt(ctx: Context, full: Boolean): Boolean =
+        withTimeoutOrNull(if (full) 45_000L else 25_000L) { attemptLocked(ctx, full) } ?: false
+
+    private suspend fun attemptLocked(ctx: Context, full: Boolean): Boolean = lock.withLock {
         if (isAlive(ctx)) return@withLock true
         val remote = RemoteController.get(ctx)
         val host = savedHost(ctx)

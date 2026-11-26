@@ -16,6 +16,7 @@ import java.security.cert.Certificate
 import java.security.cert.CertificateFactory
 import java.security.spec.PKCS8EncodedKeySpec
 import java.util.Date
+import java.util.concurrent.TimeUnit
 
 /**
  * Holds this phone's ADB identity (RSA key + self-signed certificate).
@@ -28,6 +29,7 @@ class AdbConnectionManager private constructor(context: Context) : AbsAdbConnect
 
     init {
         setApi(maxOf(Build.VERSION.SDK_INT, Build.VERSION_CODES.R))
+        setTimeout(8, TimeUnit.SECONDS)
 
         val dir = context.filesDir
         val keyFile = File(dir, "adb_key.pk8")
