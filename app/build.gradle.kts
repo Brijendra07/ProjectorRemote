@@ -54,8 +54,8 @@ dependencies {
     implementation("com.github.MuntashirAkon:libadb-android:3.1.1")
     implementation("org.conscrypt:conscrypt-android:2.5.3")
     // Self-signed certificate for ADB pairing
-    implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
-    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+    // (libadb already brings bcprov-jdk15to18; use the matching bcpkix to avoid duplicate classes)
+    implementation("org.bouncycastle:bcpkix-jdk15to18:1.81")
 
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.activity:activity-compose:1.9.3")
