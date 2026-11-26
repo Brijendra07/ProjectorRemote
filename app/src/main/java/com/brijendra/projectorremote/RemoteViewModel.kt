@@ -254,8 +254,17 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
     fun loadApps() {
         _state.update { it.copy(loadingApps = true) }
         viewModelScope.launch {
-            val apps = HelperClient.apps(_state.value.host)
-                ?: try { remote.listApps() } catch (_: Throwable) { emptyList() }
+            // Use both sources so no app is ever missing:
+            // the helper (real names + icons) and ADB (sees everything).
+            val host = _state.value.host
+            val fromHelper = HelperClient.apps(host)
+            val fromAdb = try { remote.listApps() } catch (_: Throwable) { emptyList() }
+            val merged = (fromHelper ?: emptyList()).toMutableList()
+            val have = merged.map { it.pkg }.toHashSet()
+            fromAdb.filter { it.pkg !in have }.forEach { a ->
+                merged += if (fromHelper != null) a.copy(iconUrl = HelperClient.iconUrl(host, a.pkg)) else a
+            }
+            val apps = merged.sortedBy { it.label.lowercase() }
             _state.update { it.copy(apps = apps, loadingApps = false) }
         }
     }
@@ -270,11 +279,13 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
         if (pkg in cur) {
             next = cur - pkg
             msg = "Removed $label from Quick launch"
-        } else if (cur.size >= MAX_PINS) {
+        } else if (_state.value.favoriteApps.size >= MAX_PINS) {
             _state.update { it.copy(message = "Quick launch holds $MAX_PINS apps — unpin one first") }
             return
         } else {
-            next = listOf(pkg) + cur   // newest first
+            // newest first; drop pins for apps that no longer exist
+            val visible = _state.value.apps.map { it.pkg }.toSet()
+            next = listOf(pkg) + cur.filter { it in visible }
             msg = "Pinned $label to Quick launch"
         }
         prefs.edit().putString("favs", next.joinToString(",")).apply()

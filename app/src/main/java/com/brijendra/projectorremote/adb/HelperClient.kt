@@ -23,7 +23,7 @@ object HelperClient {
     const val APK_URL =
         "https://github.com/Brijendra07/ProjectorRemote/releases/latest/download/ProjectorHelper-debug.apk"
 
-    const val LATEST_VERSION = 2
+    const val LATEST_VERSION = 3
 
     data class Info(
         val ip: String,
@@ -58,6 +58,9 @@ object HelperClient {
                 null
             }
         }
+
+    fun iconUrl(ip: String, pkg: String) =
+        "http://$ip:$PORT/icon?pkg=" + URLEncoder.encode(pkg, "UTF-8")
 
     /** Apps with real names, icons and banners (helper v2+). Null if the helper can't list them. */
     suspend fun apps(ip: String): List<TvApp>? = withContext(Dispatchers.IO) {

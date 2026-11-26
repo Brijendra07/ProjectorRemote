@@ -82,7 +82,9 @@ class RemoteController(context: Context) {
     suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, ms: Int) =
         run("input swipe $x1 $y1 $x2 $y2 $ms")
 
-    suspend fun launch(app: TvApp) = run("am start -n '${app.component}'")
+    suspend fun launch(app: TvApp) =
+        if (app.component.contains('/')) run("am start -n '${app.component}'")
+        else run("monkey -p ${app.pkg} -c android.intent.category.LEANBACK_LAUNCHER 1 || monkey -p ${app.pkg} 1")
 
     /** Lists apps that appear on the projector's home screen. */
     suspend fun listApps(): List<TvApp> = withContext(io) {

@@ -181,7 +181,7 @@ fun RemoteTab(vm: RemoteViewModel, s: UiState) {
 private fun QuickLaunch(vm: RemoteViewModel, s: UiState) {
     val apps = s.favoriteApps.take(RemoteViewModel.MAX_PINS)
     Column(Modifier.fillMaxWidth()) {
-        SectionLabel("Quick launch")
+        SectionLabel("Quick launch · hold to unpin")
         if (apps.isEmpty()) {
             Box(
                 Modifier
@@ -200,7 +200,11 @@ private fun QuickLaunch(vm: RemoteViewModel, s: UiState) {
         } else {
             Row(Modifier.fillMaxWidth()) {
                 apps.forEach { app ->
-                    AppIconTile(app, Modifier.weight(1f), onClick = { vm.launch(app) })
+                    AppIconTile(
+                        app, Modifier.weight(1f),
+                        onClick = { vm.launch(app) },
+                        onLongPress = { vm.toggleFavorite(app.pkg) }
+                    )
                 }
                 repeat(RemoteViewModel.MAX_PINS - apps.size) { Box(Modifier.weight(1f)) }
             }
@@ -291,13 +295,14 @@ private fun VolumePill(vm: RemoteViewModel, enabled: Boolean) {
 }
 
 @Composable
-private fun AppIconTile(app: TvApp, modifier: Modifier, onClick: () -> Unit) {
+private fun AppIconTile(app: TvApp, modifier: Modifier, onClick: () -> Unit, onLongPress: () -> Unit) {
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         PressSurface(
             onClick,
             Modifier.size(54.dp),
             shape = RoundedCornerShape(16.dp),
-            background = SolidColor(Glass)
+            background = SolidColor(Glass),
+            onLongPress = onLongPress
         ) {
             RemoteImage(app.iconUrl, Modifier.size(34.dp)) { LetterBadge(app.label, 34.dp) }
         }

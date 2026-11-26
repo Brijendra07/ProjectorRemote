@@ -10,6 +10,10 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- See every installed app (some preinstalled apps like Netflix are otherwise hidden). -->
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
     <!-- Granted once from the phone app over ADB (pm grant). Lets us switch Wireless debugging on. -->
     <uses-permission
         android:name="android.permission.WRITE_SECURE_SETTINGS"
