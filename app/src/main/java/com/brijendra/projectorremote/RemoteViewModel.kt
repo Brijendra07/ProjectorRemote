@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.brijendra.projectorremote.adb.HelperClient
 import com.brijendra.projectorremote.adb.RemoteController
 import com.brijendra.projectorremote.adb.TvApp
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,6 +34,11 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
     private val prefs = app.getSharedPreferences("remote", Context.MODE_PRIVATE)
     private val remote = RemoteController(app)
 
+    private var connectJob: Job? = null
+    private var userDisconnected = false
+    private var inForeground = true
+
+
     private val _state = MutableStateFlow(
         UiState(
             host = prefs.getString("host", "") ?: "",
@@ -44,6 +50,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
     init {
         // Always try: even with no saved IP, the helper scan can find the projector.
         connect()
+        startAutoReconnect()
     }
 
     fun setHost(v: String) = _state.update { it.copy(host = v.trim()) }
@@ -92,33 +99,40 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
         return info.port?.let { info.ip to it }
     }
 
+    /** Connect now (button). Also re-enables automatic reconnecting. */
     fun connect() {
+        userDisconnected = false
+        if (connectJob?.isActive == true) return
+        connectJob = viewModelScope.launch { attempt(full = true, showErrors = true) }
+    }
+
+    /** One connection attempt. full = also try mDNS and a Wi-Fi scan (slower). */
+    private suspend fun attempt(full: Boolean, showErrors: Boolean): Boolean {
         val s = _state.value
         _state.update { it.copy(conn = Conn.CONNECTING) }
-        viewModelScope.launch {
-            var ok = false
+        var ok = false
 
-            // 1) Saved IP:port (fastest)
-            val savedPort = s.port.toIntOrNull()
-            if (s.host.isNotBlank() && savedPort != null) {
-                ok = tryConnect(s.host, savedPort)
-                if (ok) save(s.host, savedPort)
+        // 1) Saved IP:port (fastest)
+        val savedPort = s.port.toIntOrNull()
+        if (s.host.isNotBlank() && savedPort != null) {
+            ok = tryConnect(s.host, savedPort)
+            if (ok) save(s.host, savedPort)
+        }
+
+        // 2) Helper on the saved IP tells us the new port
+        if (!ok && s.host.isNotBlank()) {
+            _state.update { it.copy(message = "Looking for the projector…") }
+            viaHelper(s.host)?.let { (ip, port) ->
+                ok = tryConnect(ip, port)
+                if (ok) save(ip, port)
             }
+        }
 
-            // 2) Helper on the saved IP tells us the new port
-            if (!ok && s.host.isNotBlank()) {
-                _state.update { it.copy(message = "Looking for the projector…") }
-                viaHelper(s.host)?.let { (ip, port) ->
-                    ok = tryConnect(ip, port)
-                    if (ok) save(ip, port)
-                }
-            }
-
+        if (full) {
             // 3) Projector's own Wi-Fi announcement (mDNS)
             if (!ok) {
                 ok = try { remote.autoConnect() } catch (_: Throwable) { false }
             }
-
             // 4) IP changed too: scan the Wi-Fi for the helper
             if (!ok) {
                 _state.update { it.copy(message = "Scanning Wi-Fi for the projector…") }
@@ -129,20 +143,61 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
             }
+        }
 
-            _state.update {
-                if (ok) it.copy(conn = Conn.CONNECTED, message = "Connected")
-                else it.copy(
-                    conn = Conn.DISCONNECTED,
-                    message = if (it.host.isBlank()) null
-                    else "Couldn't find the projector. Is it on and on the same Wi-Fi?"
-                )
+        _state.update {
+            if (ok) it.copy(conn = Conn.CONNECTED, message = "Connected")
+            else it.copy(
+                conn = Conn.DISCONNECTED,
+                message = when {
+                    it.host.isBlank() -> null
+                    showErrors -> "Waiting for the projector… (retrying automatically)"
+                    else -> it.message
+                }
+            )
+        }
+        if (ok) loadApps()
+        return ok
+    }
+
+    /**
+     * Runs while the app is open:
+     *  - not connected → keep retrying (quick every 4 s, full search every 4th try)
+     *  - connected → ping every 8 s so a dropped connection is noticed and fixed
+     */
+    private fun startAutoReconnect() {
+        viewModelScope.launch {
+            var tries = 0
+            while (true) {
+                delay(4_000)
+                if (!inForeground || userDisconnected) continue
+                if (connectJob?.isActive == true) continue
+                val st = _state.value
+                if (st.conn == Conn.CONNECTED) {
+                    tries = 0
+                    val alive = try { remote.ping(); true } catch (_: Throwable) { false }
+                    if (!alive) {
+                        _state.update { it.copy(conn = Conn.DISCONNECTED, message = "Connection lost — reconnecting…") }
+                    }
+                    delay(4_000)
+                } else if (st.host.isNotBlank()) {
+                    tries++
+                    val full = tries % 4 == 0
+                    connectJob = viewModelScope.launch { attempt(full = full, showErrors = true) }
+                }
             }
-            if (ok) loadApps()
         }
     }
 
+    /** Called when the app comes to the front / goes to the background. */
+    fun onForeground(visible: Boolean) {
+        inForeground = visible
+        if (visible && !userDisconnected && _state.value.conn == Conn.DISCONNECTED) connect()
+    }
+
     fun disconnect() {
+        userDisconnected = true
+        connectJob?.cancel()
         viewModelScope.launch {
             remote.disconnect()
             _state.update { it.copy(conn = Conn.DISCONNECTED, message = "Disconnected") }
@@ -236,7 +291,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 block()
             } catch (e: Throwable) {
-                _state.update { it.copy(conn = Conn.DISCONNECTED, message = "Connection lost. Tap Reconnect.") }
+                _state.update { it.copy(conn = Conn.DISCONNECTED, message = "Connection lost — reconnecting…") }
             }
         }
     }

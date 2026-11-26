@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.brijendra.projectorremote.ui.RemoteScreen
 import com.brijendra.projectorremote.ui.RemoteTheme
@@ -15,6 +16,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             RemoteTheme {
                 val vm: RemoteViewModel = viewModel()
+                LifecycleResumeEffect(vm) {
+                    vm.onForeground(true)
+                    onPauseOrDispose { vm.onForeground(false) }
+                }
                 RemoteScreen(vm)
             }
         }

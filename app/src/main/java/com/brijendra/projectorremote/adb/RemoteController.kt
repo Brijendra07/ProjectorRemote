@@ -56,6 +56,12 @@ class RemoteController(context: Context) {
         try { manager.disconnect() } catch (_: Throwable) {}
     }
 
+    /** Throws if the connection is gone. */
+    suspend fun ping() = withContext(io) {
+        if (!manager.isConnected) throw IOException("not connected")
+        writeLine("true")
+    }
+
     suspend fun key(keyCode: Int) = run("input keyevent $keyCode")
 
     suspend fun longKey(keyCode: Int) = run("input keyevent --longpress $keyCode")
