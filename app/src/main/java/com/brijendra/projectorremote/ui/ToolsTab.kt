@@ -36,6 +36,7 @@ import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.StopCircle
@@ -72,12 +73,17 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.brijendra.projectorremote.Conn
 import com.brijendra.projectorremote.RemoteViewModel
+import com.brijendra.projectorremote.Restorable
 import com.brijendra.projectorremote.UiState
 import com.brijendra.projectorremote.adb.TvApp
 
 @Composable
 fun ToolsTab(vm: RemoteViewModel, s: UiState) {
     var showManager by rememberSaveable { mutableStateOf(false) }
+    if (s.restorable != null) {
+        RestoreScreen(vm, s.restorable, busy = s.toolBusy == "restore")
+        return
+    }
     if (showManager) {
         AppManager(vm, s, onClose = { showManager = false })
         return
@@ -185,6 +191,13 @@ fun ToolsTab(vm: RemoteViewModel, s: UiState) {
                     pickApk.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream"))
                 }
                 ToolTile(Icons.Rounded.Apps, "App manager", Modifier.weight(1f)) { showManager = true }
+            }
+            VSpace(12)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                ToolTile(Icons.Rounded.Restore, "Restore apps", Modifier.weight(1f), busy = s.toolBusy == "restore") {
+                    vm.findRestorable()
+                }
+                Box(Modifier.weight(1f))
             }
         }
 
@@ -318,7 +331,13 @@ private fun AppManager(vm: RemoteViewModel, s: UiState, onClose: () -> Unit) {
             onDismissRequest = { confirm = null },
             containerColor = Glass,
             title = { Text("Uninstall ${app.label}?", color = TextHi) },
-            text = { Text("It will be removed from the projector. You can reinstall it from the Play Store later.", color = TextDim) },
+            text = {
+                Text(
+                    "Preinstalled apps are only hidden and can be brought back with Tools → Restore apps. " +
+                        "Apps you installed yourself are removed completely.",
+                    color = TextDim
+                )
+            },
             confirmButton = {
                 TextButton(onClick = { vm.uninstall(app); confirm = null }) { Text("Uninstall", color = Rose) }
             },
@@ -326,5 +345,71 @@ private fun AppManager(vm: RemoteViewModel, s: UiState, onClose: () -> Unit) {
                 TextButton(onClick = { confirm = null }) { Text("Cancel", color = TextHi) }
             }
         )
+    }
+}
+
+@Composable
+private fun RestoreScreen(vm: RemoteViewModel, items: List<Restorable>, busy: Boolean) {
+    Column(Modifier.fillMaxSize()) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 12.dp)) {
+            IconKey(Icons.AutoMirrored.Rounded.ArrowBack, "Back", vm::closeRestore, size = 44.dp, tint = TextDim)
+            HSpace(12)
+            Column {
+                Text("Restore apps", color = TextHi, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                Text("Bring back preinstalled apps that were removed or disabled", color = TextDim, fontSize = 12.sp)
+            }
+        }
+        if (items.isEmpty()) {
+            GlassCard(Modifier.fillMaxWidth()) {
+                Text("Nothing to restore", color = TextHi, fontWeight = FontWeight.SemiBold)
+                VSpace(6)
+                Text(
+                    "No removed or disabled preinstalled apps were found. If Netflix is missing, it was fully " +
+                        "uninstalled — reinstall it from the Play Store on the projector.",
+                    color = TextDim, fontSize = 13.sp
+                )
+                VSpace(12)
+                GradientButton("Open Netflix in Play Store", { vm.openPlayStore("com.netflix.ninja") }, enabled = !busy)
+            }
+            return
+        }
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(bottom = 16.dp)
+        ) {
+            items(items, key = { it.pkg + it.disabled }) { r ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Glass)
+                        .border(1.dp, Stroke.copy(alpha = 0.6f), RoundedCornerShape(18.dp))
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(r.label, color = TextHi, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            (if (r.disabled) "Disabled · " else "Removed · ") + r.pkg,
+                            color = TextFaint, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    HSpace(10)
+                    PressSurface(
+                        { vm.restore(r) },
+                        Modifier.height(38.dp).padding(0.dp),
+                        shape = RoundedCornerShape(12.dp),
+                        background = AccentBrush,
+                        bordered = false,
+                        enabled = !busy
+                    ) {
+                        Text(
+                            "Restore", color = Color(0xFF1B1408), fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        )
+                    }
+                }
+            }
+        }
     }
 }

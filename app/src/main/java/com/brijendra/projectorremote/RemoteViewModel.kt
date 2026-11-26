@@ -21,6 +21,9 @@ import kotlinx.coroutines.launch
 
 enum class Conn { DISCONNECTED, CONNECTING, CONNECTED }
 
+/** A preinstalled app that was uninstalled (kept by Android) or disabled — can be brought back. */
+data class Restorable(val pkg: String, val label: String, val disabled: Boolean)
+
 data class UiState(
     val conn: Conn = Conn.DISCONNECTED,
     val message: String? = null,
@@ -42,6 +45,7 @@ data class UiState(
     val sysInfo: List<Pair<String, String>> = emptyList(),
     val screenshot: ByteArray? = null,
     val toolBusy: String? = null,
+    val restorable: List<Restorable>? = null,
 ) {
     val favoriteApps: List<TvApp>
         get() = favorites.mapNotNull { f -> apps.firstOrNull { it.pkg == f } }
@@ -432,18 +436,66 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun uninstall(app: TvApp) = tool("app") {
-        val out = remote.shellOutput("pm uninstall ${app.pkg}")
+        val system = remote.shellOutput("pm list packages -s").lines()
+            .any { it.trim() == "package:${app.pkg}" }
+        // Preinstalled apps are only hidden for this user, so "Restore apps" can bring them back.
+        val out = if (system) remote.shellOutput("pm uninstall -k --user 0 ${app.pkg}")
+        else remote.shellOutput("pm uninstall ${app.pkg}")
         _state.update {
             it.copy(message = if (out.contains("Success")) "Uninstalled ${app.label}"
-            else "${app.label} is a system app and can't be uninstalled")
+            else "Couldn't uninstall ${app.label}")
         }
         loadApps()
     }
 
     fun clearAppCache(app: TvApp) = tool("app") {
-        remote.shellOutput("pm clear --cache-only ${app.pkg} 2>/dev/null || rm -rf /data/data/${app.pkg}/cache/*")
+        val out = remote.shellOutput("pm clear --cache-only ${app.pkg}")
+        if (out.contains("Error") || out.contains("Unknown")) error("This projector can't clear one app's cache. Use Free memory instead.")
         _state.update { it.copy(message = "Cleared ${app.label} cache") }
     }
+
+    private fun pkgs(out: String) = out.lines()
+        .map { it.trim().removePrefix("package:") }
+        .filter { it.isNotBlank() }
+        .toSet()
+
+    /** Finds preinstalled apps that were uninstalled or disabled. */
+    fun findRestorable() = tool("restore") {
+        val all = pkgs(remote.shellOutput("pm list packages -u"))
+        val installed = pkgs(remote.shellOutput("pm list packages"))
+        val disabled = pkgs(remote.shellOutput("pm list packages -d"))
+        val list = (all - installed).map { Restorable(it, RemoteController.friendlyName(it), false) } +
+            disabled.map { Restorable(it, RemoteController.friendlyName(it), true) }
+        val sorted = list
+            .filterNot { it.pkg.startsWith("com.android.") && it.pkg != "com.android.vending" }
+            .sortedWith(compareBy<Restorable>(
+                { !it.pkg.contains("netflix") },
+                { !RemoteController.KNOWN.containsKey(it.pkg) },
+                { it.label.lowercase() }
+            ))
+        _state.update { it.copy(restorable = sorted) }
+    }
+
+    fun restore(r: Restorable) = tool("restore") {
+        val out = if (r.disabled) remote.shellOutput("pm enable ${r.pkg}")
+        else remote.shellOutput("cmd package install-existing ${r.pkg}")
+        val ok = out.contains("installed for user") || out.contains("new state: enabled") ||
+            out.contains("Success", ignoreCase = true)
+        _state.update {
+            it.copy(
+                message = if (ok) "${r.label} restored ✓" else "Couldn't restore: ${out.take(80)}",
+                restorable = if (ok) it.restorable?.filterNot { x -> x.pkg == r.pkg } else it.restorable
+            )
+        }
+        loadApps()
+    }
+
+    fun openPlayStore(pkg: String) = tool("restore") {
+        remote.shellOutput("am start -a android.intent.action.VIEW -d 'market://details?id=$pkg'")
+        _state.update { it.copy(message = "Opened Play Store on the projector") }
+    }
+
+    fun closeRestore() = _state.update { it.copy(restorable = null) }
 
     fun loadSysInfo() {
         if (_state.value.conn != Conn.CONNECTED) return
