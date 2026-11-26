@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Simple remote: rounded body, D-pad ring, centre button -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFB86B"
+        android:pathData="M44,26h20a8,8 0,0 1,8 8v40a8,8 0,0 1,-8 8h-20a8,8 0,0 1,-8 -8v-40a8,8 0,0 1,8 -8z" />
+    <path
+        android:fillColor="#1B1F2A"
+        android:pathData="M54,36a10,10 0,1 1,0 20a10,10 0,1 1,0 -20z" />
+    <path
+        android:fillColor="#FFB86B"
+        android:pathData="M54,42a4,4 0,1 1,0 8a4,4 0,1 1,0 -8z" />
+    <path
+        android:fillColor="#1B1F2A"
+        android:pathData="M46,62h16v4h-16z M46,70h16v4h-16z" />
+</vector>
