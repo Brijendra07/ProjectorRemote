@@ -31,6 +31,7 @@ import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SettingsRemote
 import androidx.compose.material.icons.rounded.TouchApp
+import androidx.compose.material.icons.rounded.Widgets
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -63,6 +64,7 @@ private enum class Tab(val label: String, val icon: ImageVector) {
     PAD("Touchpad", Icons.Rounded.TouchApp),
     APPS("Apps", Icons.Rounded.Apps),
     KEYS("Keyboard", Icons.Rounded.Keyboard),
+    TOOLS("Tools", Icons.Rounded.Widgets),
 }
 
 @Composable
@@ -116,6 +118,7 @@ fun RemoteScreen(vm: RemoteViewModel) {
                                 Tab.PAD -> TouchpadTab(vm)
                                 Tab.APPS -> AppsTab(vm, s)
                                 Tab.KEYS -> KeyboardTab(vm)
+                                Tab.TOOLS -> ToolsTab(vm, s)
                             }
                         }
                     }

@@ -23,7 +23,7 @@ data class TvApp(
  * Sends commands to the projector over Wireless debugging (ADB).
  * All calls run on one background thread, in order.
  */
-class RemoteController(context: Context) {
+class RemoteController private constructor(context: Context) {
 
     private val appContext = context.applicationContext
     private val manager by lazy { AdbConnectionManager.get(appContext) }
@@ -191,7 +191,60 @@ class RemoteController(context: Context) {
         return bytes.toString("UTF-8")
     }
 
+    /** Runs a command without a shell and returns raw bytes (e.g. screencap). */
+    suspend fun execBytes(cmd: String): ByteArray = withContext(io) {
+        val stream = manager.openStream("exec:$cmd")
+        val bytes = ByteArrayOutputStream()
+        try {
+            val input = stream.openInputStream()
+            val buf = ByteArray(64 * 1024)
+            while (true) {
+                val n = try { input.read(buf) } catch (_: IOException) { -1 }
+                if (n == -1) break
+                bytes.write(buf, 0, n)
+            }
+        } finally {
+            try { stream.close() } catch (_: Throwable) {}
+        }
+        bytes.toByteArray()
+    }
+
+    /**
+     * Opens a link on the projector. YouTube links go to the YouTube app.
+     * Returns null on success or an error message.
+     */
+    suspend fun openUrl(url: String): String? {
+        val safe = url.replace("'", "%27")
+        val yt = youtubeId(url)
+        if (yt != null) {
+            for (pkg in listOf("com.google.android.youtube.tv", "com.google.android.youtube")) {
+                val out = shellOutput("am start -a android.intent.action.VIEW -d 'https://www.youtube.com/watch?v=$yt' $pkg")
+                if (!out.contains("Error")) return null
+            }
+        }
+        val out = shellOutput("am start -a android.intent.action.VIEW -d '$safe'")
+        return if (out.contains("Error")) "No app on the projector can open this link" else null
+    }
+
     companion object {
+        @Volatile
+        private var instance: RemoteController? = null
+
+        fun get(context: Context): RemoteController =
+            instance ?: synchronized(this) {
+                instance ?: RemoteController(context.applicationContext).also { instance = it }
+            }
+
+        fun youtubeId(url: String): String? {
+            val patterns = listOf(
+                Regex("""youtu\.be/([A-Za-z0-9_-]{6,})"""),
+                Regex("""[?&]v=([A-Za-z0-9_-]{6,})"""),
+                Regex("""youtube\.com/(?:shorts|live|embed)/([A-Za-z0-9_-]{6,})"""),
+            )
+            for (p in patterns) p.find(url)?.let { return it.groupValues[1] }
+            return null
+        }
+
         val KNOWN = mapOf(
             "com.netflix.ninja" to "Netflix",
             "com.netflix.mediaclient" to "Netflix",

@@ -1,0 +1,330 @@
+package com.brijendra.projectorremote.ui
+
+import android.graphics.BitmapFactory
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Apps
+import androidx.compose.material.icons.rounded.CleaningServices
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.Memory
+import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material.icons.rounded.SkipPrevious
+import androidx.compose.material.icons.rounded.StopCircle
+import androidx.compose.material.icons.rounded.VideoLibrary
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.brijendra.projectorremote.Conn
+import com.brijendra.projectorremote.RemoteViewModel
+import com.brijendra.projectorremote.UiState
+import com.brijendra.projectorremote.adb.TvApp
+
+@Composable
+fun ToolsTab(vm: RemoteViewModel, s: UiState) {
+    var showManager by rememberSaveable { mutableStateOf(false) }
+    if (showManager) {
+        AppManager(vm, s, onClose = { showManager = false })
+        return
+    }
+
+    val pickVideo = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) vm.castMedia(listOf(uri), video = true)
+    }
+    val pickPhotos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(30)) { uris ->
+        if (uris.isNotEmpty()) vm.castMedia(uris, video = false)
+    }
+    val pickApk = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) vm.installApk(uri)
+    }
+    var link by rememberSaveable { mutableStateOf("") }
+
+    LaunchedEffect(s.conn) { if (s.conn == Conn.CONNECTED) vm.loadSysInfo() }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+    ) {
+        // ---- Play from phone ----
+        SectionLabel("Play from your phone")
+        GlassCard(Modifier.fillMaxWidth()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                ToolTile(Icons.Rounded.VideoLibrary, "Video", Modifier.weight(1f), busy = s.toolBusy == "cast") {
+                    pickVideo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
+                }
+                ToolTile(Icons.Rounded.PhotoLibrary, "Photos", Modifier.weight(1f)) {
+                    pickPhotos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                }
+            }
+            s.castingLabel?.let { label ->
+                VSpace(14)
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(GlassHi)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(label, color = TextHi, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                    IconKey(Icons.Rounded.SkipPrevious, "Previous / −10 s", { vm.key(K.LEFT) }, size = 40.dp)
+                    HSpace(6)
+                    IconKey(
+                        Icons.Rounded.PlayArrow, "Play / Pause", { vm.key(K.PLAY_PAUSE) }, size = 44.dp,
+                        tint = Color(0xFF1B1408), background = AccentBrush
+                    )
+                    HSpace(6)
+                    IconKey(Icons.Rounded.SkipNext, "Next / +10 s", { vm.key(K.RIGHT) }, size = 40.dp)
+                    HSpace(6)
+                    IconKey(Icons.Rounded.Close, "Stop", vm::stopCasting, size = 40.dp, tint = Rose)
+                }
+            }
+            VSpace(10)
+            Text(
+                "Your phone streams over Wi-Fi — keep it on the same network while it plays.",
+                color = TextFaint, fontSize = 12.sp
+            )
+        }
+
+        // ---- Open a link ----
+        VSpace(22)
+        SectionLabel("Open a link")
+        GlassCard(Modifier.fillMaxWidth()) {
+            OutlinedTextField(
+                value = link,
+                onValueChange = { link = it },
+                placeholder = { Text("Paste a YouTube or web link", color = TextFaint) },
+                leadingIcon = { Icon(Icons.Rounded.Link, null, tint = TextDim) },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                colors = fieldColors(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
+                keyboardActions = KeyboardActions(onGo = { vm.openLink(link) }),
+                modifier = Modifier.fillMaxWidth()
+            )
+            VSpace(12)
+            GradientButton("Open on projector", { vm.openLink(link) }, enabled = link.isNotBlank())
+            VSpace(10)
+            Text(
+                "Tip: in YouTube, Instagram or Chrome tap Share → Play on projector.",
+                color = TextFaint, fontSize = 12.sp
+            )
+        }
+
+        // ---- Projector tools ----
+        VSpace(22)
+        SectionLabel("Projector")
+        GlassCard(Modifier.fillMaxWidth()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                ToolTile(Icons.Rounded.Visibility, "Screen peek", Modifier.weight(1f), busy = s.toolBusy == "peek") {
+                    vm.takeScreenshot()
+                }
+                ToolTile(Icons.Rounded.Memory, "Free memory", Modifier.weight(1f), busy = s.toolBusy == "ram") {
+                    vm.freeMemory()
+                }
+            }
+            VSpace(12)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                ToolTile(Icons.Rounded.Download, "Install APK", Modifier.weight(1f), busy = s.toolBusy == "apk") {
+                    pickApk.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream"))
+                }
+                ToolTile(Icons.Rounded.Apps, "App manager", Modifier.weight(1f)) { showManager = true }
+            }
+        }
+
+        // ---- System info ----
+        if (s.sysInfo.isNotEmpty()) {
+            VSpace(22)
+            SectionLabel("System")
+            GlassCard(Modifier.fillMaxWidth()) {
+                s.sysInfo.forEachIndexed { i, (k, v) ->
+                    if (i > 0) VSpace(10)
+                    Row {
+                        Text(k, color = TextDim, fontSize = 13.sp, modifier = Modifier.weight(0.38f))
+                        Text(v, color = TextHi, fontSize = 13.sp, modifier = Modifier.weight(0.62f), textAlign = TextAlign.End)
+                    }
+                }
+            }
+        }
+        VSpace(20)
+    }
+
+    // ---- Screenshot viewer ----
+    s.screenshot?.let { png ->
+        val bmp = remember(png) { BitmapFactory.decodeByteArray(png, 0, png.size)?.asImageBitmap() }
+        Dialog(onDismissRequest = vm::closeScreenshot, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(Glass)
+                    .padding(14.dp)
+            ) {
+                Text("Projector screen", color = TextHi, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                VSpace(12)
+                if (bmp != null) {
+                    Image(
+                        bmp, contentDescription = "Projector screen",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(bmp.width.toFloat() / bmp.height.coerceAtLeast(1))
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(1.dp, Stroke, RoundedCornerShape(12.dp))
+                    )
+                }
+                VSpace(14)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    GhostButton("Refresh", vm::takeScreenshot, Modifier.weight(1f), enabled = s.toolBusy == null)
+                    GradientButton("Close", vm::closeScreenshot, Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ToolTile(
+    icon: ImageVector,
+    label: String,
+    modifier: Modifier = Modifier,
+    busy: Boolean = false,
+    onClick: () -> Unit,
+) {
+    PressSurface(
+        onClick,
+        modifier.height(84.dp),
+        shape = RoundedCornerShape(18.dp),
+        background = KeyBrush,
+        enabled = !busy
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(icon, null, tint = Amber, modifier = Modifier.size(26.dp))
+            VSpace(6)
+            Text(if (busy) "Working…" else label, color = TextHi, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+@Composable
+private fun AppManager(vm: RemoteViewModel, s: UiState, onClose: () -> Unit) {
+    var confirm by remember { mutableStateOf<TvApp?>(null) }
+    Column(Modifier.fillMaxSize()) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 12.dp)) {
+            IconKey(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClose, size = 44.dp, tint = TextDim)
+            HSpace(12)
+            Column {
+                Text("App manager", color = TextHi, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                Text("Stop, clear cache or uninstall", color = TextDim, fontSize = 12.sp)
+            }
+        }
+        LazyColumn(
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            contentPadding = PaddingValues(bottom = 16.dp)
+        ) {
+            items(s.apps, key = { it.pkg }) { app ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Glass)
+                        .border(1.dp, Stroke.copy(alpha = 0.6f), RoundedCornerShape(18.dp))
+                        .padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        Modifier
+                            .size(42.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(GlassHi),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        RemoteImage(app.iconUrl, Modifier.size(30.dp)) { LetterBadge(app.label, 30.dp) }
+                    }
+                    HSpace(12)
+                    Column(Modifier.weight(1f)) {
+                        Text(app.label, color = TextHi, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(app.pkg, color = TextFaint, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    IconKey(Icons.Rounded.StopCircle, "Force stop", { vm.forceStop(app) }, size = 38.dp, tint = TextDim,
+                        background = SolidColor(Color.Transparent))
+                    IconKey(Icons.Rounded.CleaningServices, "Clear cache", { vm.clearAppCache(app) }, size = 38.dp, tint = TextDim,
+                        background = SolidColor(Color.Transparent))
+                    IconKey(Icons.Rounded.Delete, "Uninstall", { confirm = app }, size = 38.dp, tint = Rose,
+                        background = SolidColor(Color.Transparent))
+                }
+            }
+        }
+    }
+    confirm?.let { app ->
+        AlertDialog(
+            onDismissRequest = { confirm = null },
+            containerColor = Glass,
+            title = { Text("Uninstall ${app.label}?", color = TextHi) },
+            text = { Text("It will be removed from the projector. You can reinstall it from the Play Store later.", color = TextDim) },
+            confirmButton = {
+                TextButton(onClick = { vm.uninstall(app); confirm = null }) { Text("Uninstall", color = Rose) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirm = null }) { Text("Cancel", color = TextHi) }
+            }
+        )
+    }
+}

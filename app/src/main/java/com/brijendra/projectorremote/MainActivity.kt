@@ -1,6 +1,11 @@
 package com.brijendra.projectorremote
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import androidx.activity.result.contract.ActivityResultContracts
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -15,12 +20,26 @@ class MainActivity : ComponentActivity() {
 
     private val vm: RemoteViewModel by viewModels()
 
+    private val notifPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    /** Ask once for notification permission (needed for the notification remote on Android 13+). */
+    private fun askNotificationsOnce() {
+        if (Build.VERSION.SDK_INT < 33) return
+        val prefs = getSharedPreferences("remote", Context.MODE_PRIVATE)
+        if (prefs.getBoolean("askedNotif", false)) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        prefs.edit().putBoolean("askedNotif", true).apply()
+        notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
         )
+        askNotificationsOnce()
         setContent {
             RemoteTheme {
                 LifecycleResumeEffect(vm) {

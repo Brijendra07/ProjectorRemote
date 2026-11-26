@@ -12,8 +12,8 @@ android {
         applicationId = "com.brijendra.projectorremote"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "2.2"
+        versionCode = 7
+        versionName = "3.0"
     }
 
     // Fixed signing key so new builds install over old ones (keeps the pairing).
@@ -69,6 +69,7 @@ dependencies {
     implementation("org.bouncycastle:bcpkix-jdk15to18:1.81")
 
     implementation("androidx.core:core-ktx:1.15.0")
+    implementation("androidx.media:media:1.7.0")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")

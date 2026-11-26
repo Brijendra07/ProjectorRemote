@@ -23,7 +23,7 @@ object HelperClient {
     const val APK_URL =
         "https://github.com/Brijendra07/ProjectorRemote/releases/latest/download/ProjectorHelper-debug.apk"
 
-    const val LATEST_VERSION = 3
+    const val LATEST_VERSION = 4
 
     data class Info(
         val ip: String,

@@ -4,7 +4,11 @@ import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import android.net.Uri
+import com.brijendra.projectorremote.adb.Connector
 import com.brijendra.projectorremote.adb.HelperClient
+import com.brijendra.projectorremote.media.Caster
+import com.brijendra.projectorremote.service.RemoteService
 import com.brijendra.projectorremote.adb.RemoteController
 import com.brijendra.projectorremote.adb.TvApp
 import kotlinx.coroutines.Job
@@ -32,6 +36,12 @@ data class UiState(
     val helperActive: Boolean = false,
     val volumeKeys: Boolean = true,
     val haptics: Boolean = true,
+    val notifRemote: Boolean = true,
+    // Tools
+    val castingLabel: String? = null,
+    val sysInfo: List<Pair<String, String>> = emptyList(),
+    val screenshot: ByteArray? = null,
+    val toolBusy: String? = null,
 ) {
     val favoriteApps: List<TvApp>
         get() = favorites.mapNotNull { f -> apps.firstOrNull { it.pkg == f } }
@@ -44,7 +54,8 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private val prefs = app.getSharedPreferences("remote", Context.MODE_PRIVATE)
-    private val remote = RemoteController(app)
+    private val remote = RemoteController.get(app)
+    private val ctx: Context get() = getApplication<Application>()
 
     private var connectJob: Job? = null
     private var userDisconnected = false
@@ -60,6 +71,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
                 ?.split(',')?.filter { it.isNotBlank() } ?: emptyList(),
             volumeKeys = prefs.getBoolean("volumeKeys", true),
             haptics = prefs.getBoolean("haptics", true),
+            notifRemote = prefs.getBoolean("notifRemote", true),
         )
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -90,9 +102,11 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(haptics = on) }
     }
 
-    private fun save(host: String, port: Int?) {
-        prefs.edit().putString("host", host).putString("port", port?.toString() ?: "").apply()
-        _state.update { it.copy(host = host, port = port?.toString() ?: it.port) }
+    fun setNotifRemote(on: Boolean) {
+        prefs.edit().putBoolean("notifRemote", on).apply()
+        _state.update { it.copy(notifRemote = on) }
+        if (on && _state.value.conn == Conn.CONNECTED) RemoteService.start(ctx)
+        if (!on && _state.value.castingLabel == null) RemoteService.stop(ctx)
     }
 
     // ---------- Pairing & connecting ----------
@@ -122,55 +136,27 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private suspend fun tryConnect(host: String, port: Int): Boolean =
-        try { remote.connect(host, port) } catch (_: Throwable) { false }
-
-    private suspend fun viaHelper(ip: String): Pair<String, Int>? {
-        var info = HelperClient.query(ip, enable = true) ?: return null
-        if (info.port == null || !info.adbWifi) {
-            delay(3000)
-            info = HelperClient.query(ip) ?: return null
-        }
-        return info.port?.let { info.ip to it }
-    }
-
     fun connect() {
         userDisconnected = false
+        // Settings screen may have edited the IP/port
+        val st = _state.value
+        if (st.host.isNotBlank()) {
+            prefs.edit().putString("host", st.host).putString("port", st.port).apply()
+        }
         if (connectJob?.isActive == true) return
         connectJob = viewModelScope.launch { attempt(full = true) }
     }
 
     private suspend fun attempt(full: Boolean): Boolean {
-        val s = _state.value
         _state.update { it.copy(conn = Conn.CONNECTING) }
-        var ok = false
-
-        val savedPort = s.port.toIntOrNull()
-        if (s.host.isNotBlank() && savedPort != null) {
-            ok = tryConnect(s.host, savedPort)
-            if (ok) save(s.host, savedPort)
-        }
-        if (!ok && s.host.isNotBlank()) {
-            viaHelper(s.host)?.let { (ip, port) ->
-                ok = tryConnect(ip, port)
-                if (ok) save(ip, port)
-            }
-        }
-        if (full) {
-            if (!ok) ok = try { remote.autoConnect() } catch (_: Throwable) { false }
-            if (!ok) {
-                HelperClient.scan(getApplication<Application>())?.let { found ->
-                    viaHelper(found.ip)?.let { (ip, port) ->
-                        ok = tryConnect(ip, port)
-                        if (ok) save(ip, port)
-                    }
-                }
-            }
-        }
-
+        val ok = Connector.attempt(ctx, full)
         _state.update {
-            if (ok) it.copy(conn = Conn.CONNECTED, message = null)
-            else it.copy(conn = Conn.DISCONNECTED)
+            it.copy(
+                conn = if (ok) Conn.CONNECTED else Conn.DISCONNECTED,
+                message = if (ok) null else it.message,
+                host = Connector.savedHost(ctx).ifBlank { it.host },
+                port = Connector.savedPort(ctx)?.toString() ?: it.port,
+            )
         }
         if (ok) onConnected()
         return ok
@@ -178,6 +164,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun onConnected() {
         loadApps()
+        if (_state.value.notifRemote) RemoteService.start(ctx)
         viewModelScope.launch {
             val info = HelperClient.query(_state.value.host)
             info?.name?.let { name ->
@@ -203,7 +190,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
                 val st = _state.value
                 if (st.conn == Conn.CONNECTED) {
                     tries = 0
-                    val alive = try { remote.ping(); true } catch (_: Throwable) { false }
+                    val alive = Connector.isAlive(ctx)
                     if (!alive) _state.update { it.copy(conn = Conn.DISCONNECTED) }
                     delay(4_000)
                 } else if (st.host.isNotBlank()) {
@@ -352,6 +339,146 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
                 log("Error: ${e.message ?: e.javaClass.simpleName}")
             } finally {
                 _state.update { it.copy(helperBusy = false) }
+            }
+        }
+    }
+
+    // ---------- Tools ----------
+
+    private fun tool(label: String, block: suspend () -> Unit) {
+        if (_state.value.conn != Conn.CONNECTED) {
+            _state.update { it.copy(message = "Not connected yet") }
+            return
+        }
+        _state.update { it.copy(toolBusy = label) }
+        viewModelScope.launch {
+            try {
+                block()
+            } catch (e: Throwable) {
+                _state.update { it.copy(message = e.message ?: "Something went wrong") }
+            } finally {
+                _state.update { it.copy(toolBusy = null) }
+            }
+        }
+    }
+
+    fun castMedia(uris: List<Uri>, video: Boolean) {
+        if (uris.isEmpty()) return
+        tool("cast") {
+            val err = Caster.cast(ctx, uris, video)
+            if (err != null) {
+                _state.update { it.copy(message = err) }
+            } else {
+                val label = if (video) "Playing video on projector"
+                else if (uris.size == 1) "Showing photo on projector" else "Showing ${uris.size} photos"
+                _state.update { it.copy(castingLabel = label, message = "Sent to projector") }
+            }
+        }
+    }
+
+    fun stopCasting() {
+        key(4) // Back closes the player
+        _state.update { it.copy(castingLabel = null) }
+        if (!_state.value.notifRemote) RemoteService.stop(ctx)
+    }
+
+    fun openLink(url: String) {
+        val u = url.trim()
+        if (u.isEmpty()) return
+        tool("link") {
+            val full = if (u.startsWith("http")) u else "https://$u"
+            val err = remote.openUrl(full)
+            _state.update { it.copy(message = err ?: "Opened on projector") }
+        }
+    }
+
+    fun takeScreenshot() = tool("peek") {
+        val png = remote.execBytes("screencap -p")
+        if (png.size < 100) error("Couldn't capture the screen")
+        _state.update { it.copy(screenshot = png) }
+    }
+
+    fun closeScreenshot() = _state.update { it.copy(screenshot = null) }
+
+    private suspend fun memAvailableMb(): Long =
+        Regex("""MemAvailable:\s+(\d+)""").find(remote.shellOutput("cat /proc/meminfo"))
+            ?.groupValues?.get(1)?.toLongOrNull()?.div(1024) ?: 0L
+
+    fun freeMemory() = tool("ram") {
+        val before = memAvailableMb()
+        remote.shellOutput("am kill-all; pm trim-caches 999G")
+        delay(1500)
+        val after = memAvailableMb()
+        val freed = (after - before).coerceAtLeast(0)
+        _state.update { it.copy(message = "Freed ${freed} MB · ${after} MB available") }
+        loadSysInfo()
+    }
+
+    fun installApk(uri: Uri) = tool("apk") {
+        val bytes = ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            ?: error("Couldn't read the file")
+        _state.update { it.copy(message = "Installing ${bytes.size / 1024 / 1024} MB…") }
+        val result = remote.installApk(bytes)
+        _state.update {
+            it.copy(message = if (result.contains("Success")) "App installed on projector ✓"
+            else "Install failed: ${result.take(80)}")
+        }
+        loadApps()
+    }
+
+    fun forceStop(app: TvApp) = tool("app") {
+        remote.shellOutput("am force-stop ${app.pkg}")
+        _state.update { it.copy(message = "Stopped ${app.label}") }
+    }
+
+    fun uninstall(app: TvApp) = tool("app") {
+        val out = remote.shellOutput("pm uninstall ${app.pkg}")
+        _state.update {
+            it.copy(message = if (out.contains("Success")) "Uninstalled ${app.label}"
+            else "${app.label} is a system app and can't be uninstalled")
+        }
+        loadApps()
+    }
+
+    fun clearAppCache(app: TvApp) = tool("app") {
+        remote.shellOutput("pm clear --cache-only ${app.pkg} 2>/dev/null || rm -rf /data/data/${app.pkg}/cache/*")
+        _state.update { it.copy(message = "Cleared ${app.label} cache") }
+    }
+
+    fun loadSysInfo() {
+        if (_state.value.conn != Conn.CONNECTED) return
+        viewModelScope.launch {
+            try {
+                val out = remote.shellOutput(
+                    "echo M=$(getprop ro.product.model); " +
+                        "echo V=$(getprop ro.build.version.release); " +
+                        "echo U=$(cat /proc/uptime); " +
+                        "grep -E 'MemTotal|MemAvailable' /proc/meminfo; " +
+                        "df /data | tail -1"
+                )
+                val lines = out.lines()
+                fun v(p: String) = lines.firstOrNull { it.startsWith(p) }?.substringAfter(p)?.trim().orEmpty()
+                fun kb(name: String) = Regex("""$name:\s+(\d+)""").find(out)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+                val upSec = v("U=").substringBefore(' ').substringBefore('.').toLongOrNull() ?: 0L
+                val total = kb("MemTotal") / 1024
+                val avail = kb("MemAvailable") / 1024
+                val df = lines.lastOrNull { it.contains("/data") || it.startsWith("/dev") }
+                    ?.trim()?.split(Regex("""\s+""")).orEmpty()
+                // df columns: Filesystem 1K-blocks Used Available Use% Mounted
+                val dfTotal = df.getOrNull(1)?.toLongOrNull()
+                val dfFree = df.getOrNull(3)?.toLongOrNull()
+                val info = buildList {
+                    add("Model" to v("M=").ifBlank { "?" })
+                    add("Android" to v("V=").ifBlank { "?" })
+                    add("Memory" to "$avail MB free of $total MB")
+                    if (dfTotal != null && dfFree != null) {
+                        add("Storage" to String.format("%.1f GB free of %.1f GB", dfFree / 1048576.0, dfTotal / 1048576.0))
+                    }
+                    add("Uptime" to "${upSec / 3600} h ${(upSec % 3600) / 60} min")
+                    add("Address" to "${_state.value.host}:${_state.value.port}")
+                }
+                _state.update { it.copy(sysInfo = info) }
+            } catch (_: Throwable) {
             }
         }
     }

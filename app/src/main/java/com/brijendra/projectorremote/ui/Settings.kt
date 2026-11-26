@@ -169,7 +169,18 @@ fun SettingsScreen(vm: RemoteViewModel, s: UiState, firstRun: Boolean, onBack: (
                     s.volumeKeys, vm::setVolumeKeys
                 )
                 VSpace(14)
+                ToggleRow(
+                    "Notification remote",
+                    "Back, volume and play/pause in your notifications and lock screen",
+                    s.notifRemote, vm::setNotifRemote
+                )
+                VSpace(14)
                 ToggleRow("Haptic feedback", "Vibrate softly on every button press", s.haptics, vm::setHaptics)
+                VSpace(14)
+                Text(
+                    "Widget: long-press your home screen → Widgets → Projector Remote.",
+                    color = TextFaint, fontSize = 12.sp
+                )
             }
 
             VSpace(22)
