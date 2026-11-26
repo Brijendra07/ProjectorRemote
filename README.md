@@ -27,6 +27,14 @@ After that the app connects on its own every time you open it.
 Activity Launcher → Settings (`com.android.tv.settings`) →
 class `com.android.tv.settings.system.development.DevelopmentActivity` → Launch.
 
+## Auto-start (no projector remote needed after restarts)
+Open the app's **Auto** tab and tap **Set up auto-start**. The phone downloads **Projector Helper** and installs it on the projector over Wi-Fi, then gives it permission to switch Wireless debugging on.
+After that, whenever the projector restarts:
+- the helper switches Wireless debugging back on (at boot, when Wi-Fi reconnects, and every 30 s), and
+- answers on port 8765 with the projector's current IP and ADB port.
+
+The phone app connects in this order: saved IP:port → helper on the saved IP → mDNS discovery → Wi-Fi scan for the helper.
+
 ## Notes
 - Wireless debugging can switch off when the projector restarts. If the app can't connect, turn it back on (the projector remembers the pairing).
 - Anyone on your Wi-Fi who has paired with the projector can control it. Turn Wireless debugging off if you share the network with people you don't trust.

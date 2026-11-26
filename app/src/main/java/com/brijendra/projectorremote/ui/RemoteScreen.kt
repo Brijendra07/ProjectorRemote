@@ -86,7 +86,7 @@ private const val K_ENTER = 66
 private const val K_SEARCH = 84
 private const val K_RECENTS = 187
 
-private enum class Tab(val title: String) { REMOTE("Remote"), PAD("Touchpad"), TYPE("Type"), APPS("Apps") }
+private enum class Tab(val title: String) { REMOTE("Remote"), PAD("Pad"), TYPE("Type"), APPS("Apps"), AUTO("Auto") }
 
 @Composable
 fun RemoteScreen(vm: RemoteViewModel) {
@@ -138,6 +138,7 @@ fun RemoteScreen(vm: RemoteViewModel) {
                     Tab.PAD -> TouchPad(vm)
                     Tab.TYPE -> TypePad(vm)
                     Tab.APPS -> AppsPad(vm, s.apps, s.loadingApps)
+                    Tab.AUTO -> AutoPad(vm, s.helperBusy, s.helperLog, s.helperStatus)
                 }
             }
         }
@@ -551,5 +552,51 @@ private fun AppsPad(vm: RemoteViewModel, apps: List<com.brijendra.projectorremot
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun AutoPad(vm: RemoteViewModel, busy: Boolean, log: List<String>, status: String?) {
+    LaunchedEffect(Unit) { vm.checkHelper() }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+    ) {
+        Card {
+            Text("Auto-start after restart", fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Installs a small helper on the projector. After every restart it switches " +
+                    "Wireless debugging on by itself, and tells this app the new IP and port. " +
+                    "No projector remote needed.",
+                color = TextDim, fontSize = 13.sp
+            )
+            Spacer(Modifier.height(12.dp))
+            Text("Status: ${status ?: "checking…"}", fontSize = 14.sp)
+            Spacer(Modifier.height(12.dp))
+            Button(
+                onClick = { vm.setupHelper() },
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text(if (busy) "Working…" else "Set up auto-start") }
+            Spacer(Modifier.height(8.dp))
+            Row {
+                OutlinedButton(onClick = vm::checkHelper, enabled = !busy, modifier = Modifier.weight(1f)) {
+                    Text("Check status")
+                }
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(onClick = { vm.setupHelper(forceReinstall = true) }, enabled = !busy, modifier = Modifier.weight(1f)) {
+                    Text("Reinstall")
+                }
+            }
+        }
+        if (log.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            Card {
+                log.forEach { Text("• $it", fontSize = 13.sp, color = TextDim) }
+            }
+        }
+        Spacer(Modifier.height(24.dp))
     }
 }

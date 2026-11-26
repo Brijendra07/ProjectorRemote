@@ -16,4 +16,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "ProjectorRemote"
-include(":app")
+include(":app", ":helper")

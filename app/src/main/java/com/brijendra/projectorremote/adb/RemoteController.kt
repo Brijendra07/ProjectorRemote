@@ -92,6 +92,35 @@ class RemoteController(context: Context) {
             .toList()
     }
 
+    /** Runs one shell command and returns its output. */
+    suspend fun shellOutput(cmd: String): String = withContext(io) { exec(cmd) }
+
+    /** Installs an APK on the projector over the ADB connection (like `adb install`). */
+    suspend fun installApk(apk: ByteArray): String = withContext(io) {
+        val stream = manager.openStream("exec:cmd package install -r -S ${apk.size}")
+        val result = ByteArrayOutputStream()
+        try {
+            val out = stream.openOutputStream()
+            var off = 0
+            while (off < apk.size) {
+                val n = minOf(64 * 1024, apk.size - off)
+                out.write(apk, off, n)
+                off += n
+            }
+            out.flush()
+            val input = stream.openInputStream()
+            val buf = ByteArray(1024)
+            while (true) {
+                val n = try { input.read(buf) } catch (_: IOException) { -1 }
+                if (n == -1) break
+                result.write(buf, 0, n)
+            }
+        } finally {
+            try { stream.close() } catch (_: Throwable) {}
+        }
+        result.toString("UTF-8").trim()
+    }
+
     /** Runs a command through a persistent shell (fast, no output). */
     private suspend fun run(cmd: String) = withContext(io) {
         try {

@@ -4,8 +4,10 @@ import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.brijendra.projectorremote.adb.HelperClient
 import com.brijendra.projectorremote.adb.RemoteController
 import com.brijendra.projectorremote.adb.TvApp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,6 +23,9 @@ data class UiState(
     val port: String = "",
     val apps: List<TvApp> = emptyList(),
     val loadingApps: Boolean = false,
+    val helperBusy: Boolean = false,
+    val helperLog: List<String> = emptyList(),
+    val helperStatus: String? = null,
 )
 
 class RemoteViewModel(app: Application) : AndroidViewModel(app) {
@@ -37,12 +42,18 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     init {
-        if (_state.value.host.isNotBlank()) connect()
+        // Always try: even with no saved IP, the helper scan can find the projector.
+        connect()
     }
 
     fun setHost(v: String) = _state.update { it.copy(host = v.trim()) }
     fun setPort(v: String) = _state.update { it.copy(port = v.filter(Char::isDigit)) }
     fun clearMessage() = _state.update { it.copy(message = null) }
+
+    private fun save(host: String, port: Int?) {
+        prefs.edit().putString("host", host).putString("port", port?.toString() ?: "").apply()
+        _state.update { it.copy(host = host, port = port?.toString() ?: it.port) }
+    }
 
     fun pair(pairPort: String, code: String) {
         val host = _state.value.host
@@ -68,31 +79,63 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private suspend fun tryConnect(host: String, port: Int): Boolean =
+        try { remote.connect(host, port) } catch (_: Throwable) { false }
+
+    /** Ask the helper app for the current port (switching Wireless debugging on if needed). */
+    private suspend fun viaHelper(ip: String): Pair<String, Int>? {
+        var info = HelperClient.query(ip, enable = true) ?: return null
+        if (info.port == null || !info.adbWifi) {
+            delay(3000)
+            info = HelperClient.query(ip) ?: return null
+        }
+        return info.port?.let { info.ip to it }
+    }
+
     fun connect() {
         val s = _state.value
-        if (s.host.isBlank()) {
-            _state.update { it.copy(message = "Enter the projector IP address") }
-            return
-        }
-        prefs.edit().putString("host", s.host).putString("port", s.port).apply()
         _state.update { it.copy(conn = Conn.CONNECTING) }
         viewModelScope.launch {
             var ok = false
-            var error: String? = null
-            // 1) Saved IP:port
-            s.port.toIntOrNull()?.let { port ->
-                ok = try { remote.connect(s.host, port) } catch (e: Throwable) { error = e.message ?: e.javaClass.simpleName; false }
+
+            // 1) Saved IP:port (fastest)
+            val savedPort = s.port.toIntOrNull()
+            if (s.host.isNotBlank() && savedPort != null) {
+                ok = tryConnect(s.host, savedPort)
+                if (ok) save(s.host, savedPort)
             }
-            // 2) Port changes after a projector reboot — discover it automatically.
+
+            // 2) Helper on the saved IP tells us the new port
+            if (!ok && s.host.isNotBlank()) {
+                _state.update { it.copy(message = "Looking for the projector…") }
+                viaHelper(s.host)?.let { (ip, port) ->
+                    ok = tryConnect(ip, port)
+                    if (ok) save(ip, port)
+                }
+            }
+
+            // 3) Projector's own Wi-Fi announcement (mDNS)
             if (!ok) {
-                ok = try { remote.autoConnect() } catch (e: Throwable) { error = e.message ?: e.javaClass.simpleName; false }
+                ok = try { remote.autoConnect() } catch (_: Throwable) { false }
             }
+
+            // 4) IP changed too: scan the Wi-Fi for the helper
+            if (!ok) {
+                _state.update { it.copy(message = "Scanning Wi-Fi for the projector…") }
+                HelperClient.scan(getApplication<Application>())?.let { found ->
+                    viaHelper(found.ip)?.let { (ip, port) ->
+                        ok = tryConnect(ip, port)
+                        if (ok) save(ip, port)
+                    }
+                }
+            }
+
             _state.update {
                 if (ok) it.copy(conn = Conn.CONNECTED, message = "Connected")
                 else it.copy(
                     conn = Conn.DISCONNECTED,
-                    message = "Couldn't connect. Check Wireless debugging is ON and the port is correct" +
-                        (error?.let { e -> " ($e)" } ?: "")
+                    message = if (it.host.isBlank()) null
+                    else "Couldn't find the projector. Is it on and on the same Wi-Fi?"
                 )
             }
             if (ok) loadApps()
@@ -119,6 +162,71 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---------- Auto-start helper ----------
+
+    private fun log(line: String) = _state.update { it.copy(helperLog = it.helperLog + line) }
+
+    fun checkHelper() {
+        viewModelScope.launch {
+            val info = HelperClient.query(_state.value.host)
+            _state.update {
+                it.copy(
+                    helperStatus = when {
+                        info == null -> "Not running on the projector yet"
+                        !info.permission -> "Running, but permission missing — tap Set up"
+                        else -> "Active ✓ — Wireless debugging will turn on by itself after restarts"
+                    }
+                )
+            }
+        }
+    }
+
+    fun setupHelper(forceReinstall: Boolean = false) {
+        if (_state.value.conn != Conn.CONNECTED) {
+            _state.update { it.copy(message = "Connect first") }
+            return
+        }
+        _state.update { it.copy(helperBusy = true, helperLog = emptyList()) }
+        viewModelScope.launch {
+            try {
+                val pkg = HelperClient.PACKAGE
+                log("Checking projector…")
+                val installed = remote.shellOutput("pm path $pkg").contains("package:")
+                if (!installed || forceReinstall) {
+                    log("Downloading helper app…")
+                    val apk = HelperClient.downloadApk()
+                    log("Installing on projector (${apk.size / 1024} KB)…")
+                    val result = remote.installApk(apk)
+                    if (!result.contains("Success")) error("Install failed: $result")
+                    log("Installed ✓")
+                } else {
+                    log("Helper already installed ✓")
+                }
+
+                log("Giving it permission to switch on Wireless debugging…")
+                val grant = remote.shellOutput("pm grant $pkg android.permission.WRITE_SECURE_SETTINGS").trim()
+                if (grant.isNotEmpty()) log(grant)
+
+                log("Starting helper…")
+                remote.shellOutput("am start-foreground-service -n $pkg/.KeeperService")
+                delay(2500)
+
+                val info = HelperClient.query(_state.value.host)
+                when {
+                    info == null -> log("Started. (Couldn't reach it yet — tap Check status in a few seconds.)")
+                    !info.permission -> log("Running, but permission wasn't granted: $grant")
+                    else -> log("Helper is running ✓ (port ${info.port ?: "?"})")
+                }
+                log("Done! After a restart, just open this app — it will find the projector by itself.")
+                checkHelper()
+            } catch (e: Throwable) {
+                log("Error: ${e.message ?: e.javaClass.simpleName}")
+            } finally {
+                _state.update { it.copy(helperBusy = false) }
+            }
+        }
+    }
+
     private fun send(block: suspend () -> Unit) {
         if (_state.value.conn != Conn.CONNECTED) {
             _state.update { it.copy(message = "Not connected") }
@@ -128,12 +236,8 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 block()
             } catch (e: Throwable) {
-                _state.update { it.copy(conn = Conn.DISCONNECTED, message = "Connection lost. Tap Connect.") }
+                _state.update { it.copy(conn = Conn.DISCONNECTED, message = "Connection lost. Tap Reconnect.") }
             }
         }
-    }
-
-    override fun onCleared() {
-        super.onCleared()
     }
 }
