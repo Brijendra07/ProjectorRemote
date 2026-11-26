@@ -2,7 +2,9 @@ package com.brijendra.projectorremote.adb
 
 import android.content.Context
 import io.github.muntashirakon.adb.AdbStream
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
@@ -31,7 +33,7 @@ data class TvApp(
 class RemoteController private constructor(context: Context) {
 
     private val appContext = context.applicationContext
-    private val manager by lazy { AdbConnectionManager.get(appContext) }
+    private val manager: AdbConnectionManager get() = AdbConnectionManager.get(appContext)
     /** One command at a time. */
     private val opLock = Mutex()
     private val watchdogScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -41,20 +43,32 @@ class RemoteController private constructor(context: Context) {
      * (restarted, Wi-Fi dropped), the connection is torn down so nothing stays frozen.
      */
     private suspend fun <T> op(timeoutMs: Long = 10_000, block: () -> T): T = opLock.withLock {
-        val dog = watchdogScope.launch {
-            delay(timeoutMs)
+        // Run on its own thread so a frozen call can never block the app: if it doesn't
+        // finish in time we abandon it, throw away the connection and start fresh.
+        val result = CompletableDeferred<T>()
+        val worker = thread(isDaemon = true, name = "adb-op") {
+            try {
+                result.complete(block())
+            } catch (e: Throwable) {
+                result.completeExceptionally(e)
+            }
+        }
+        val finished = withTimeoutOrNull(timeoutMs) { result.join(); true } ?: false
+        if (!finished) {
+            worker.interrupt()
             hardReset()
+            throw IOException("Projector not responding")
         }
-        try {
-            withContext(Dispatchers.IO) { block() }
-        } finally {
-            dog.cancel()
-        }
+        result.await()
     }
 
+    /** Drops the connection AND the connection object, so a stuck one can't block reconnecting. */
     private fun hardReset() {
-        resetShell()
-        try { manager.disconnect() } catch (_: Throwable) {}
+        val oldShell = shell
+        shell = null
+        shellOut = null
+        thread(isDaemon = true) { try { oldShell?.close() } catch (_: Throwable) {} }
+        AdbConnectionManager.reset()
     }
 
     private var shell: AdbStream? = null

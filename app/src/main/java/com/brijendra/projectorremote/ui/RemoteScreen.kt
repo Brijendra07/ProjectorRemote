@@ -151,6 +151,8 @@ private fun TopBar(s: UiState, onSettings: () -> Unit) {
             when {
                 s.conn == Conn.CONNECTED -> StatusPill("Connected · ${s.host}", Mint, pulsing = false)
                 s.message == "Disconnected" -> StatusPill("Disconnected", Rose, pulsing = false)
+                com.brijendra.projectorremote.adb.Connector.needsPairing ->
+                    StatusPill("Pairing needed · open Settings", Rose, pulsing = false)
                 else -> StatusPill("Searching for projector…", Amber, pulsing = true)
             }
         }

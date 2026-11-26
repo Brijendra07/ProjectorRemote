@@ -14,6 +14,14 @@ object Connector {
 
     private val lock = Mutex()
 
+    /** Why the last attempt failed (shown in the app). */
+    @Volatile var lastError: String? = null
+        private set
+
+    /** True if the projector says this phone isn't paired any more. */
+    @Volatile var needsPairing: Boolean = false
+        private set
+
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("remote", Context.MODE_PRIVATE)
 
     fun savedHost(ctx: Context): String = prefs(ctx).getString("host", "") ?: ""
@@ -52,7 +60,15 @@ object Connector {
         val port = savedPort(ctx)
 
         suspend fun tryConnect(h: String, p: Int): Boolean =
-            try { remote.connect(h, p) } catch (_: Throwable) { false }
+            try {
+                val ok = remote.connect(h, p)
+                if (ok) { lastError = null; needsPairing = false }
+                ok
+            } catch (e: Throwable) {
+                if (e.javaClass.simpleName.contains("Pairing")) needsPairing = true
+                lastError = (e.message ?: e.javaClass.simpleName).take(120)
+                false
+            }
 
         if (host.isNotBlank() && port != null && tryConnect(host, port)) {
             return@withLock true

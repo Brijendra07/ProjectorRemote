@@ -161,7 +161,11 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
         _state.update {
             it.copy(
                 conn = if (ok) Conn.CONNECTED else Conn.DISCONNECTED,
-                message = if (ok) null else it.message,
+                message = when {
+                    ok -> null
+                    Connector.needsPairing -> "This phone needs to be paired again — open Settings"
+                    else -> it.message
+                },
                 host = Connector.savedHost(ctx).ifBlank { it.host },
                 port = Connector.savedPort(ctx)?.toString() ?: it.port,
             )

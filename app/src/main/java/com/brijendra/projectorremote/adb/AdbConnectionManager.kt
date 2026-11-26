@@ -88,6 +88,16 @@ class AdbConnectionManager private constructor(context: Context) : AbsAdbConnect
         @Volatile
         private var instance: AdbConnectionManager? = null
 
+        /** Forget the current connection object (closing it in the background). Keys stay, so no re-pairing. */
+        fun reset() {
+            val old = synchronized(this) { instance.also { instance = null } }
+            if (old != null) {
+                kotlin.concurrent.thread(isDaemon = true) {
+                    try { old.close() } catch (_: Throwable) {}
+                }
+            }
+        }
+
         fun get(context: Context): AdbConnectionManager =
             instance ?: synchronized(this) {
                 instance ?: AdbConnectionManager(context.applicationContext).also { instance = it }

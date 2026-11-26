@@ -92,6 +92,12 @@ fun SettingsScreen(vm: RemoteViewModel, s: UiState, firstRun: Boolean, onBack: (
                     Conn.DISCONNECTED -> StatusPill("Not connected", Rose, false)
                 }
             }
+            if (s.conn != Conn.CONNECTED) {
+                com.brijendra.projectorremote.adb.Connector.lastError?.let { err ->
+                    VSpace(8)
+                    Text("Last error: $err", color = Rose, fontSize = 12.sp)
+                }
+            }
             VSpace(14)
             Row {
                 OutlinedTextField(
