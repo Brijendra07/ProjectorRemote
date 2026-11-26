@@ -21,6 +21,9 @@ import kotlinx.coroutines.launch
 
 enum class Conn { DISCONNECTED, CONNECTING, CONNECTED }
 
+/** Result of the "Fix an app" scan. */
+data class DoctorResult(val query: String, val packages: List<String>, val report: String)
+
 /** A preinstalled app that was uninstalled (kept by Android) or disabled — can be brought back. */
 data class Restorable(val pkg: String, val label: String, val disabled: Boolean)
 
@@ -46,6 +49,7 @@ data class UiState(
     val screenshot: ByteArray? = null,
     val toolBusy: String? = null,
     val restorable: List<Restorable>? = null,
+    val doctor: DoctorResult? = null,
 ) {
     val favoriteApps: List<TvApp>
         get() = favorites.mapNotNull { f -> apps.firstOrNull { it.pkg == f } }
@@ -506,6 +510,49 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun closeRestore() = _state.update { it.copy(restorable = null) }
+
+    // ---------- Fix an app (deep repair) ----------
+
+    /** Finds every package matching [query] (installed, removed, disabled or hidden) and reports its state. */
+    fun doctorScan(query: String) {
+        val q = query.trim().lowercase().filter { it.isLetterOrDigit() || it == '.' || it == '_' }
+        if (q.isEmpty()) return
+        tool("doctor") {
+            val pkgs = pkgs(remote.shellOutput("pm list packages -u")).filter { it.lowercase().contains(q) }
+            val report = StringBuilder()
+            for (p in pkgs) {
+                report.append("■ ").append(p).append('\n')
+                val dump = remote.shellOutput(
+                    "dumpsys package $p | grep -E 'versionName|codePath|installed=|hidden=|suspended=|enabled=|stopped=' | head -12"
+                )
+                report.append(dump.trim()).append("\n\n")
+            }
+            if (pkgs.isEmpty()) report.append("No package containing \"$q\" exists on the projector at all.")
+            _state.update { it.copy(doctor = DoctorResult(q, pkgs, report.toString().trim())) }
+        }
+    }
+
+    /** Tries every safe way to bring a package back to a working state, then opens it. */
+    fun doctorRepair(pkg: String) = tool("doctor") {
+        remote.shellOutput(
+            "cmd package install-existing $pkg; " +
+                "pm enable $pkg; " +
+                "pm unhide $pkg; " +
+                "pm unsuspend $pkg; " +
+                "am force-stop $pkg"
+        )
+        val launch = remote.shellOutput(
+            "monkey -p $pkg -c android.intent.category.LEANBACK_LAUNCHER 1 2>&1 || monkey -p $pkg 1 2>&1"
+        )
+        val opened = launch.contains("Events injected") && !launch.contains("No activities found")
+        _state.update {
+            it.copy(message = if (opened) "Repaired and opened ✓" else "Repaired — but the app has no screen to open")
+        }
+        loadApps()
+        doctorScan(_state.value.doctor?.query ?: pkg)
+    }
+
+    fun closeDoctor() = _state.update { it.copy(doctor = null) }
 
     fun loadSysInfo() {
         if (_state.value.conn != Conn.CONNECTED) return

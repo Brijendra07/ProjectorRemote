@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -29,6 +30,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Apps
+import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.CleaningServices
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
@@ -73,6 +75,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.brijendra.projectorremote.Conn
+import com.brijendra.projectorremote.DoctorResult
 import com.brijendra.projectorremote.RemoteViewModel
 import com.brijendra.projectorremote.Restorable
 import com.brijendra.projectorremote.UiState
@@ -81,6 +84,10 @@ import com.brijendra.projectorremote.adb.TvApp
 @Composable
 fun ToolsTab(vm: RemoteViewModel, s: UiState) {
     var showManager by rememberSaveable { mutableStateOf(false) }
+    if (s.doctor != null) {
+        DoctorScreen(vm, s, s.doctor)
+        return
+    }
     if (s.restorable != null) {
         RestoreScreen(vm, s.restorable, busy = s.toolBusy == "restore")
         return
@@ -198,7 +205,9 @@ fun ToolsTab(vm: RemoteViewModel, s: UiState) {
                 ToolTile(Icons.Rounded.Restore, "Restore apps", Modifier.weight(1f), busy = s.toolBusy == "restore") {
                     vm.findRestorable()
                 }
-                Box(Modifier.weight(1f))
+                ToolTile(Icons.Rounded.Build, "Fix an app", Modifier.weight(1f), busy = s.toolBusy == "doctor") {
+                    vm.doctorScan("netflix")
+                }
             }
         }
 
@@ -452,5 +461,51 @@ private fun RestoreScreen(vm: RemoteViewModel, items: List<Restorable>, busy: Bo
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun DoctorScreen(vm: RemoteViewModel, s: UiState, d: DoctorResult) {
+    var query by rememberSaveable { mutableStateOf(d.query) }
+    val busy = s.toolBusy == "doctor"
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 12.dp)) {
+            IconKey(Icons.AutoMirrored.Rounded.ArrowBack, "Back", vm::closeDoctor, size = 44.dp, tint = TextDim)
+            HSpace(12)
+            Column {
+                Text("Fix an app", color = TextHi, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                Text("Find an app even if it's hidden, disabled or removed", color = TextDim, fontSize = 12.sp)
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = query, onValueChange = { query = it }, singleLine = true,
+                placeholder = { Text("App name, e.g. netflix", color = TextFaint) },
+                shape = RoundedCornerShape(14.dp), colors = fieldColors(),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { vm.doctorScan(query) }),
+                modifier = Modifier.weight(1f)
+            )
+            HSpace(10)
+            GradientButton("Scan", { vm.doctorScan(query) }, Modifier.width(96.dp), enabled = !busy)
+        }
+        VSpace(16)
+        d.packages.forEach { pkg ->
+            GlassCard(Modifier.fillMaxWidth()) {
+                Text(pkg, color = TextHi, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                VSpace(10)
+                GradientButton(if (busy) "Working…" else "Repair & open", { vm.doctorRepair(pkg) }, enabled = !busy)
+            }
+            VSpace(12)
+        }
+        SectionLabel("Details")
+        GlassCard(Modifier.fillMaxWidth()) {
+            Text(d.report, color = TextDim, fontSize = 11.sp, lineHeight = 15.sp)
+        }
+        VSpace(20)
     }
 }
