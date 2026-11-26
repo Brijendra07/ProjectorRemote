@@ -23,7 +23,7 @@ object HelperClient {
     const val APK_URL =
         "https://github.com/Brijendra07/ProjectorRemote/releases/latest/download/ProjectorHelper-debug.apk"
 
-    const val LATEST_VERSION = 4
+    const val LATEST_VERSION = 5
 
     data class Info(
         val ip: String,
@@ -66,8 +66,8 @@ object HelperClient {
     suspend fun apps(ip: String): List<TvApp>? = withContext(Dispatchers.IO) {
         try {
             val c = URL("http://$ip:$PORT/apps").openConnection() as HttpURLConnection
-            c.connectTimeout = 2500
-            c.readTimeout = 5000
+            c.connectTimeout = 3000
+            c.readTimeout = 20000
             val text = c.inputStream.bufferedReader().use { it.readText() }.trim()
             c.disconnect()
             if (!text.startsWith("[")) return@withContext null

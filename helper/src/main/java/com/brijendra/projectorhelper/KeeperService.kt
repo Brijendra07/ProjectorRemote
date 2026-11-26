@@ -206,7 +206,7 @@ class KeeperService : Service() {
 
     companion object {
         const val PORT = 8765
-        const val VERSION = 4
+        const val VERSION = 5
         private const val CHANNEL = "keeper"
 
         fun start(ctx: Context) {

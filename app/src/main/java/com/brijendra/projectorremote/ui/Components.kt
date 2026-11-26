@@ -287,12 +287,13 @@ object IconCache {
         return withContext(Dispatchers.IO) {
             try {
                 val c = URL(url).openConnection() as HttpURLConnection
-                c.connectTimeout = 2500
-                c.readTimeout = 5000
-                if (c.responseCode != 200) {
+                c.connectTimeout = 3000
+                c.readTimeout = 8000
+                if (c.responseCode == 404) {
                     missing += url
                     return@withContext null
                 }
+                if (c.responseCode != 200) return@withContext null
                 val bytes = c.inputStream.use { it.readBytes() }
                 c.disconnect()
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
@@ -312,7 +313,12 @@ fun RemoteImage(
     placeholder: @Composable () -> Unit = {},
 ) {
     val img by produceState<ImageBitmap?>(initialValue = null, url) {
-        value = url?.let { IconCache.load(it) }
+        if (url == null) return@produceState
+        for (attempt in 0 until 4) {
+            val b = IconCache.load(url)
+            if (b != null) { value = b; return@produceState }
+            delay(2000L * (attempt + 1))
+        }
     }
     val bmp = img
     if (bmp != null) {

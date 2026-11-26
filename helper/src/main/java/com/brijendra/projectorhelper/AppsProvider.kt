@@ -24,9 +24,8 @@ object AppsProvider {
                 val ai = ri.activityInfo ?: continue
                 val pkg = ai.packageName
                 if (pkg == ctx.packageName || seen.containsKey(pkg)) continue
-                val hasBanner = try {
-                    ai.loadBanner(pm) != null || ai.applicationInfo.loadBanner(pm) != null
-                } catch (_: Throwable) { false }
+                // Just check the resource ids — loading every banner made the list slow.
+                val hasBanner = ai.banner != 0 || (ai.applicationInfo?.banner ?: 0) != 0
                 seen[pkg] = JSONObject()
                     .put("pkg", pkg)
                     .put("label", ri.loadLabel(pm).toString())

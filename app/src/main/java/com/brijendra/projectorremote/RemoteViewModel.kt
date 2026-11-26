@@ -262,11 +262,13 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
             // the helper (real names + icons) and ADB (sees everything).
             val host = _state.value.host
             val fromHelper = HelperClient.apps(host)
+            val helperUp = fromHelper != null || HelperClient.query(host) != null
             val fromAdb = try { remote.listApps() } catch (_: Throwable) { emptyList() }
             val merged = (fromHelper ?: emptyList()).toMutableList()
             val have = merged.map { it.pkg }.toHashSet()
             fromAdb.filter { it.pkg !in have }.forEach { a ->
-                merged += if (fromHelper != null) a.copy(iconUrl = HelperClient.iconUrl(host, a.pkg)) else a
+                // Icons work as long as the helper answers, even if its list didn't.
+                merged += if (helperUp) a.copy(iconUrl = HelperClient.iconUrl(host, a.pkg)) else a
             }
             val apps = merged.sortedBy { it.label.lowercase() }
             _state.update { it.copy(apps = apps, loadingApps = false) }
