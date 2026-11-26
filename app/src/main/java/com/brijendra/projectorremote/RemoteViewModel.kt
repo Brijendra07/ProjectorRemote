@@ -50,6 +50,7 @@ data class UiState(
     val toolBusy: String? = null,
     val restorable: List<Restorable>? = null,
     val doctor: DoctorResult? = null,
+    val healthLog: List<String> = emptyList(),
 ) {
     val favoriteApps: List<TvApp>
         get() = favorites.mapNotNull { f -> apps.firstOrNull { it.pkg == f } }
@@ -80,6 +81,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
             volumeKeys = prefs.getBoolean("volumeKeys", true),
             haptics = prefs.getBoolean("haptics", true),
             notifRemote = prefs.getBoolean("notifRemote", true),
+            healthLog = prefs.getString("healthLog", "")!!.split("\n").filter { it.isNotBlank() },
         )
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -175,7 +177,10 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun onConnected() {
-        loadApps()
+        viewModelScope.launch {
+            try { healthCheck() } catch (_: Throwable) {}
+            loadApps()
+        }
         if (_state.value.notifRemote) RemoteService.start(ctx)
         viewModelScope.launch {
             val info = HelperClient.query(_state.value.host)
@@ -444,6 +449,14 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun uninstall(app: TvApp) = tool("app") {
+        // You removed it on purpose — never auto-restore it.
+        putPrefSet("ignored", prefSet("ignored") + app.pkg)
+        putPrefSet("watched", prefSet("watched") - app.pkg)
+        if (app.pkg in _state.value.favorites) {
+            val next = _state.value.favorites - app.pkg
+            prefs.edit().putString("favs", next.joinToString(",")).apply()
+            _state.update { it.copy(favorites = next) }
+        }
         val system = remote.shellOutput("pm list packages -s").lines()
             .any { it.trim() == "package:${app.pkg}" }
         // Preinstalled apps are only hidden for this user, so "Restore apps" can bring them back.
@@ -495,6 +508,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun restore(r: Restorable) = tool("restore") {
+        putPrefSet("ignored", prefSet("ignored") - r.pkg)
         val out = if (r.disabled) remote.shellOutput("pm enable ${r.pkg}")
         else remote.shellOutput("cmd package install-existing ${r.pkg}")
         val ok = out.contains("installed for user") || out.contains("new state: enabled") ||
@@ -515,6 +529,59 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
 
     fun closeRestore() = _state.update { it.copy(restorable = null) }
 
+
+    // ---------- App health (auto-heal) ----------
+
+    private fun prefSet(key: String): Set<String> = prefs.getStringSet(key, emptySet())?.toSet() ?: emptySet()
+    private fun putPrefSet(key: String, v: Set<String>) = prefs.edit().putStringSet(key, v).apply()
+
+    private fun logHealth(line: String) {
+        val stamp = java.text.SimpleDateFormat("dd MMM HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+        val next = (listOf("$stamp · $line") + _state.value.healthLog).take(25)
+        prefs.edit().putString("healthLog", next.joinToString("\n")).apply()
+        _state.update { it.copy(healthLog = next) }
+    }
+
+    /**
+     * Runs on every connect. Checks Netflix, pinned apps and any app you repaired before.
+     * If the projector removed, hid, disabled or suspended one, it is fixed silently and
+     * the evidence (state + who changed it) is written to the health log.
+     */
+    private suspend fun healthCheck() {
+        val ignored = prefSet("ignored")
+        val netflix = pkgs(remote.shellOutput("pm list packages -u")).filter { it.contains("netflix", true) }
+        val watch = (prefSet("watched") + _state.value.favorites + netflix) - ignored
+        var fixed = 0
+        for (p in watch) {
+            val dump = remote.shellOutput(
+                "dumpsys package $p | grep -E 'User 0:|lastDisabledCaller|suspendingPackage' | head -4"
+            ).trim()
+            if (dump.isEmpty()) continue // not on this projector at all
+            val user = dump.lines().firstOrNull { it.contains("User 0:") }.orEmpty()
+            val problems = buildList {
+                if (user.contains("installed=false")) add("removed")
+                if (user.contains("hidden=true")) add("hidden")
+                if (user.contains("suspended=true")) add("suspended")
+                Regex("""enabled=(\d)""").find(user)?.groupValues?.get(1)?.let { e ->
+                    if (e == "2" || e == "3" || e == "4") add("disabled($e)")
+                }
+            }
+            if (problems.isEmpty()) continue
+            val by = Regex("""(lastDisabledCaller|suspendingPackage)[:=]\s*(\S+)""").find(dump)?.groupValues?.get(2)
+            remote.shellOutput(
+                "cmd package install-existing $p; pm enable $p; pm unhide $p; pm unsuspend $p"
+            )
+            fixed++
+            logHealth(
+                "${RemoteController.friendlyName(p)} was ${problems.joinToString("+")}" +
+                    (by?.let { " by $it" } ?: "") + " → fixed"
+            )
+        }
+        if (fixed > 0) {
+            _state.update { it.copy(message = if (fixed == 1) "Fixed 1 app the projector had hidden" else "Fixed $fixed apps the projector had hidden") }
+        }
+    }
+
     // ---------- Fix an app (deep repair) ----------
 
     /** Finds every package matching [query] (installed, removed, disabled or hidden) and reports its state. */
@@ -527,7 +594,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
             for (p in pkgs) {
                 report.append("■ ").append(p).append('\n')
                 val dump = remote.shellOutput(
-                    "dumpsys package $p | grep -E 'versionName|codePath|installed=|hidden=|suspended=|enabled=|stopped=' | head -12"
+                    "dumpsys package $p | grep -E 'versionName|codePath|User 0:|lastDisabledCaller|suspendingPackage' | head -12"
                 )
                 report.append(dump.trim()).append("\n\n")
             }
@@ -538,6 +605,8 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Tries every safe way to bring a package back to a working state, then opens it. */
     fun doctorRepair(pkg: String) = tool("doctor") {
+        putPrefSet("watched", prefSet("watched") + pkg)
+        putPrefSet("ignored", prefSet("ignored") - pkg)
         remote.shellOutput(
             "cmd package install-existing $pkg; " +
                 "pm enable $pkg; " +

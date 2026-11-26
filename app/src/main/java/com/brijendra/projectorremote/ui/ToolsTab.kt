@@ -40,6 +40,7 @@ import androidx.compose.material.icons.rounded.Memory
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Restore
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.StopCircle
@@ -290,6 +291,11 @@ private fun ToolTile(
 private fun AppManager(vm: RemoteViewModel, s: UiState, onClose: () -> Unit) {
     var selected by remember { mutableStateOf<TvApp?>(null) }
     var confirm by remember { mutableStateOf<Pair<TvApp, String>?>(null) }
+    var query by rememberSaveable { mutableStateOf("") }
+    val apps = remember(s.apps, query) {
+        if (query.isBlank()) s.apps
+        else s.apps.filter { it.label.contains(query, true) || it.pkg.contains(query, true) }
+    }
     Column(Modifier.fillMaxSize()) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 12.dp)) {
             IconKey(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClose, size = 44.dp, tint = TextDim)
@@ -299,11 +305,23 @@ private fun AppManager(vm: RemoteViewModel, s: UiState, onClose: () -> Unit) {
                 Text("Tap an app for options", color = TextDim, fontSize = 12.sp)
             }
         }
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = { Text("Search ${s.apps.size} apps", color = TextFaint) },
+            leadingIcon = { Icon(Icons.Rounded.Search, null, tint = TextDim) },
+            singleLine = true,
+            shape = RoundedCornerShape(16.dp),
+            colors = fieldColors(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp)
+        )
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(bottom = 16.dp)
         ) {
-            items(s.apps, key = { it.pkg }) { app ->
+            items(apps, key = { it.pkg }) { app ->
                 PressSurface(
                     { selected = app },
                     Modifier.fillMaxWidth(),
@@ -505,6 +523,21 @@ private fun DoctorScreen(vm: RemoteViewModel, s: UiState, d: DoctorResult) {
         SectionLabel("Details")
         GlassCard(Modifier.fillMaxWidth()) {
             Text(d.report, color = TextDim, fontSize = 11.sp, lineHeight = 15.sp)
+        }
+        VSpace(18)
+        SectionLabel("Auto-fix history")
+        GlassCard(Modifier.fillMaxWidth()) {
+            if (s.healthLog.isEmpty()) {
+                Text(
+                    "Nothing yet. Every time the app connects it checks Netflix, your pinned apps and any app " +
+                        "you repaired, and fixes them if the projector hid them. Each fix is listed here.",
+                    color = TextDim, fontSize = 12.sp
+                )
+            } else {
+                s.healthLog.forEach {
+                    Text(it, color = TextDim, fontSize = 12.sp, modifier = Modifier.padding(vertical = 3.dp))
+                }
+            }
         }
         VSpace(20)
     }
