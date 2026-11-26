@@ -39,6 +39,10 @@ data class UiState(
 
 class RemoteViewModel(app: Application) : AndroidViewModel(app) {
 
+    companion object {
+        const val MAX_PINS = 5
+    }
+
     private val prefs = app.getSharedPreferences("remote", Context.MODE_PRIVATE)
     private val remote = RemoteController(app)
 
@@ -61,6 +65,11 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     init {
+        if (!prefs.getBoolean("favsV2", false)) {
+            val migrated = _state.value.favorites.reversed().take(MAX_PINS)
+            prefs.edit().putString("favs", migrated.joinToString(",")).putBoolean("favsV2", true).apply()
+            _state.update { it.copy(favorites = migrated) }
+        }
         connect()
         startAutoReconnect()
     }
@@ -247,16 +256,7 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val apps = HelperClient.apps(_state.value.host)
                 ?: try { remote.listApps() } catch (_: Throwable) { emptyList() }
-            _state.update { st ->
-                // First time: pin popular streaming apps automatically.
-                val favs = if (st.favorites.isEmpty() && !prefs.contains("favs")) {
-                    val popular = RemoteController.KNOWN.keys
-                    apps.filter { it.pkg in popular && it.pkg != "com.android.vending" }
-                        .map { it.pkg }.take(4)
-                        .also { prefs.edit().putString("favs", it.joinToString(",")).apply() }
-                } else st.favorites
-                st.copy(apps = apps, loadingApps = false, favorites = favs)
-            }
+            _state.update { it.copy(apps = apps, loadingApps = false) }
         }
     }
 
@@ -264,9 +264,21 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
 
     fun toggleFavorite(pkg: String) {
         val cur = _state.value.favorites
-        val next = if (pkg in cur) cur - pkg else (cur + pkg).takeLast(8)
+        val label = _state.value.apps.firstOrNull { it.pkg == pkg }?.label ?: "App"
+        val next: List<String>
+        val msg: String
+        if (pkg in cur) {
+            next = cur - pkg
+            msg = "Removed $label from Quick launch"
+        } else if (cur.size >= MAX_PINS) {
+            _state.update { it.copy(message = "Quick launch holds $MAX_PINS apps — unpin one first") }
+            return
+        } else {
+            next = listOf(pkg) + cur   // newest first
+            msg = "Pinned $label to Quick launch"
+        }
         prefs.edit().putString("favs", next.joinToString(",")).apply()
-        _state.update { it.copy(favorites = next) }
+        _state.update { it.copy(favorites = next, message = msg) }
     }
 
     // ---------- Auto-start helper ----------

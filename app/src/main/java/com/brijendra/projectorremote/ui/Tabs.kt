@@ -8,6 +8,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -124,155 +125,167 @@ object K {
 fun RemoteTab(vm: RemoteViewModel, s: UiState) {
     val on = s.conn == Conn.CONNECTED
     Column(
-        Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState()),
+        Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        // Navigation keys
         Row(
             Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            horizontalArrangement = Arrangement.SpaceEvenly
         ) {
+            IconKey(Icons.AutoMirrored.Rounded.ArrowBack, "Back", { vm.key(K.BACK) }, size = 54.dp, enabled = on)
+            IconKey(Icons.Rounded.Home, "Home", { vm.key(K.HOME) }, size = 54.dp, enabled = on)
             IconKey(
-                Icons.Rounded.PowerSettingsNew, "Power", { vm.key(K.POWER) },
-                tint = Rose, background = SolidColor(Rose.copy(alpha = 0.13f)), enabled = on
+                Icons.Rounded.Menu, "Menu", { vm.key(K.MENU) },
+                size = 54.dp, onLongPress = { vm.key(K.RECENTS) }, enabled = on
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                IconKey(Icons.AutoMirrored.Rounded.ArrowBack, "Back", { vm.key(K.BACK) }, enabled = on)
-                IconKey(Icons.Rounded.Home, "Home", { vm.key(K.HOME) }, enabled = on)
-                IconKey(
-                    Icons.Rounded.Menu, "Menu", { vm.key(K.MENU) },
-                    onLongPress = { vm.key(K.RECENTS) }, enabled = on
-                )
-            }
-            IconKey(Icons.Rounded.Tune, "Projector settings", { vm.key(K.SETTINGS) }, enabled = on)
+            @Suppress("DEPRECATION")
+            IconKey(Icons.Rounded.Input, "Input / HDMI", { vm.key(K.INPUT) }, size = 54.dp, enabled = on)
         }
 
-        VSpace(30)
-        DPad(vm, on)
-        VSpace(30)
+        // D-pad sized to whatever space is left — never scrolls
+        BoxWithConstraints(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            contentAlignment = Alignment.Center
+        ) {
+            val d = minOf(maxWidth * 0.80f, maxHeight * 0.90f, 300.dp)
+            DPad(vm, on, d)
+        }
 
+        // Volume + media
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            VolumeRocker(vm, on)
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconKey(Icons.Rounded.FastRewind, "Rewind", { vm.key(K.REWIND) }, size = 52.dp, repeat = true, enabled = on)
-                    IconKey(
-                        Icons.Rounded.PlayArrow, "Play / Pause", { vm.key(K.PLAY_PAUSE) },
-                        size = 64.dp, tint = Color(0xFF1B1408), background = AccentBrush, enabled = on
-                    )
-                    IconKey(Icons.Rounded.FastForward, "Fast forward", { vm.key(K.FFWD) }, size = 52.dp, repeat = true, enabled = on)
-                }
-                VSpace(14)
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    IconKey(Icons.AutoMirrored.Rounded.VolumeOff, "Mute", { vm.key(K.MUTE) }, size = 52.dp, enabled = on)
-                    IconKey(Icons.Rounded.Search, "Search", { vm.key(K.SEARCH) }, size = 52.dp, enabled = on)
-                    @Suppress("DEPRECATION")
-                    IconKey(Icons.Rounded.Input, "Input / HDMI", { vm.key(K.INPUT) }, size = 52.dp, enabled = on)
-                }
+            VolumePill(vm, on)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconKey(Icons.Rounded.FastRewind, "Rewind", { vm.key(K.REWIND) }, size = 48.dp, repeat = true, enabled = on)
+                IconKey(
+                    Icons.Rounded.PlayArrow, "Play / Pause", { vm.key(K.PLAY_PAUSE) },
+                    size = 58.dp, tint = Color(0xFF1B1408), background = AccentBrush, enabled = on
+                )
+                IconKey(Icons.Rounded.FastForward, "Fast forward", { vm.key(K.FFWD) }, size = 48.dp, repeat = true, enabled = on)
             }
         }
 
-        if (s.favoriteApps.isNotEmpty()) {
-            VSpace(28)
-            Box(Modifier.fillMaxWidth()) { SectionLabel("Quick launch") }
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                s.favoriteApps.take(4).forEach { app ->
-                    AppIconTile(app, Modifier.weight(1f), onClick = { vm.launch(app) })
-                }
-                repeat(4 - s.favoriteApps.take(4).size) { Box(Modifier.weight(1f)) }
-            }
-        }
-        VSpace(20)
+        VSpace(18)
+        QuickLaunch(vm, s)
+        VSpace(10)
     }
 }
 
 @Composable
-private fun DPad(vm: RemoteViewModel, enabled: Boolean) {
+private fun QuickLaunch(vm: RemoteViewModel, s: UiState) {
+    val apps = s.favoriteApps.take(RemoteViewModel.MAX_PINS)
+    Column(Modifier.fillMaxWidth()) {
+        SectionLabel("Quick launch")
+        if (apps.isEmpty()) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(Glass)
+                    .border(1.dp, Stroke, RoundedCornerShape(18.dp))
+                    .padding(vertical = 16.dp, horizontal = 14.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "Hold any app in the Apps tab to pin it here",
+                    color = TextFaint, fontSize = 12.sp, textAlign = TextAlign.Center
+                )
+            }
+        } else {
+            Row(Modifier.fillMaxWidth()) {
+                apps.forEach { app ->
+                    AppIconTile(app, Modifier.weight(1f), onClick = { vm.launch(app) })
+                }
+                repeat(RemoteViewModel.MAX_PINS - apps.size) { Box(Modifier.weight(1f)) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DPad(vm: RemoteViewModel, enabled: Boolean, size: androidx.compose.ui.unit.Dp) {
     val shape = CircleShape
+    val arrow = size * 0.26f
+    val icon = size * 0.13f
+    val edge = size * 0.02f
     Box(
         Modifier
-            .size(286.dp)
+            .size(size)
             .alpha(if (enabled) 1f else 0.45f)
             .clip(shape)
-            .background(
-                Brush.radialGradient(listOf(Color(0xFF252A3A), Color(0xFF171A25)))
-            )
+            .background(Brush.radialGradient(listOf(Color(0xFF252A3A), Color(0xFF171A25))))
             .border(1.dp, Stroke, shape),
         contentAlignment = Alignment.Center
     ) {
-        // inner ring
         Box(
             Modifier
-                .size(176.dp)
+                .size(size * 0.60f)
                 .clip(CircleShape)
                 .border(1.dp, Stroke.copy(alpha = 0.6f), CircleShape)
         )
-        val arrow = 78.dp
         val clear = SolidColor(Color.Transparent)
-        PressSurface({ vm.key(K.UP) }, Modifier.align(Alignment.TopCenter).padding(top = 6.dp).size(arrow),
+        PressSurface({ vm.key(K.UP) }, Modifier.align(Alignment.TopCenter).padding(top = edge).size(arrow),
             repeat = true, background = clear, bordered = false, enabled = enabled) {
-            Icon(Icons.Rounded.KeyboardArrowUp, "Up", tint = TextHi, modifier = Modifier.size(38.dp))
+            Icon(Icons.Rounded.KeyboardArrowUp, "Up", tint = TextHi, modifier = Modifier.size(icon))
         }
-        PressSurface({ vm.key(K.DOWN) }, Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp).size(arrow),
+        PressSurface({ vm.key(K.DOWN) }, Modifier.align(Alignment.BottomCenter).padding(bottom = edge).size(arrow),
             repeat = true, background = clear, bordered = false, enabled = enabled) {
-            Icon(Icons.Rounded.KeyboardArrowDown, "Down", tint = TextHi, modifier = Modifier.size(38.dp))
-        }
-        @Suppress("DEPRECATION")
-        PressSurface({ vm.key(K.LEFT) }, Modifier.align(Alignment.CenterStart).padding(start = 6.dp).size(arrow),
-            repeat = true, background = clear, bordered = false, enabled = enabled) {
-            Icon(Icons.Rounded.KeyboardArrowLeft, "Left", tint = TextHi, modifier = Modifier.size(38.dp))
+            Icon(Icons.Rounded.KeyboardArrowDown, "Down", tint = TextHi, modifier = Modifier.size(icon))
         }
         @Suppress("DEPRECATION")
-        PressSurface({ vm.key(K.RIGHT) }, Modifier.align(Alignment.CenterEnd).padding(end = 6.dp).size(arrow),
+        PressSurface({ vm.key(K.LEFT) }, Modifier.align(Alignment.CenterStart).padding(start = edge).size(arrow),
             repeat = true, background = clear, bordered = false, enabled = enabled) {
-            Icon(Icons.Rounded.KeyboardArrowRight, "Right", tint = TextHi, modifier = Modifier.size(38.dp))
+            Icon(Icons.Rounded.KeyboardArrowLeft, "Left", tint = TextHi, modifier = Modifier.size(icon))
+        }
+        @Suppress("DEPRECATION")
+        PressSurface({ vm.key(K.RIGHT) }, Modifier.align(Alignment.CenterEnd).padding(end = edge).size(arrow),
+            repeat = true, background = clear, bordered = false, enabled = enabled) {
+            Icon(Icons.Rounded.KeyboardArrowRight, "Right", tint = TextHi, modifier = Modifier.size(icon))
         }
         PressSurface(
             { vm.key(K.OK) },
-            Modifier.size(112.dp),
+            Modifier.size(size * 0.38f),
             onLongPress = { vm.longKey(K.OK) },
             background = AccentBrush,
             bordered = false,
             enabled = enabled
         ) {
-            Text("OK", color = Color(0xFF1B1408), fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text("OK", color = Color(0xFF1B1408), fontSize = (size.value * 0.07f).sp, fontWeight = FontWeight.Bold)
         }
     }
 }
 
+/** Horizontal volume pill: −  [speaker = mute]  + */
 @Composable
-private fun VolumeRocker(vm: RemoteViewModel, enabled: Boolean) {
-    val shape = RoundedCornerShape(36.dp)
-    Column(
+private fun VolumePill(vm: RemoteViewModel, enabled: Boolean) {
+    val shape = RoundedCornerShape(30.dp)
+    Row(
         Modifier
-            .width(72.dp)
             .alpha(if (enabled) 1f else 0.45f)
             .clip(shape)
             .background(KeyBrush)
             .border(1.dp, Stroke, shape)
-            .padding(vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        PressSurface({ vm.key(K.VOL_UP) }, Modifier.size(60.dp), repeat = true,
-            background = SolidColor(Color.Transparent), bordered = false, enabled = enabled) {
-            Icon(Icons.Rounded.Add, "Volume up", tint = TextHi, modifier = Modifier.size(26.dp))
+        val clear = SolidColor(Color.Transparent)
+        PressSurface({ vm.key(K.VOL_DOWN) }, Modifier.size(52.dp), repeat = true,
+            background = clear, bordered = false, enabled = enabled) {
+            Icon(Icons.Rounded.Remove, "Volume down", tint = TextHi, modifier = Modifier.size(22.dp))
         }
-        Icon(
-            Icons.AutoMirrored.Rounded.VolumeUp, null, tint = TextFaint,
-            modifier = Modifier.padding(vertical = 8.dp).size(20.dp)
-        )
-        PressSurface({ vm.key(K.VOL_DOWN) }, Modifier.size(60.dp), repeat = true,
-            background = SolidColor(Color.Transparent), bordered = false, enabled = enabled) {
-            Icon(Icons.Rounded.Remove, "Volume down", tint = TextHi, modifier = Modifier.size(26.dp))
+        PressSurface({ vm.key(K.MUTE) }, Modifier.size(44.dp),
+            background = clear, bordered = false, enabled = enabled) {
+            Icon(Icons.AutoMirrored.Rounded.VolumeUp, "Mute", tint = TextDim, modifier = Modifier.size(20.dp))
+        }
+        PressSurface({ vm.key(K.VOL_UP) }, Modifier.size(52.dp), repeat = true,
+            background = clear, bordered = false, enabled = enabled) {
+            Icon(Icons.Rounded.Add, "Volume up", tint = TextHi, modifier = Modifier.size(22.dp))
         }
     }
 }
@@ -282,16 +295,17 @@ private fun AppIconTile(app: TvApp, modifier: Modifier, onClick: () -> Unit) {
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         PressSurface(
             onClick,
-            Modifier.size(60.dp),
-            shape = RoundedCornerShape(18.dp),
+            Modifier.size(54.dp),
+            shape = RoundedCornerShape(16.dp),
             background = SolidColor(Glass)
         ) {
-            RemoteImage(app.iconUrl, Modifier.size(40.dp)) { LetterBadge(app.label, 40.dp) }
+            RemoteImage(app.iconUrl, Modifier.size(34.dp)) { LetterBadge(app.label, 34.dp) }
         }
         VSpace(6)
         Text(
             app.label, fontSize = 11.sp, color = TextDim, maxLines = 1,
-            overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
+            overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp)
         )
     }
 }
@@ -429,7 +443,7 @@ fun AppsTab(vm: RemoteViewModel, s: UiState) {
             when {
                 s.loadingApps -> "Loading apps…"
                 apps.isEmpty() -> "No apps found"
-                else -> "${apps.size} apps · hold an app to pin it to the Remote screen"
+                else -> "${apps.size} apps · hold an app to pin or unpin it"
             },
             color = TextFaint, fontSize = 12.sp, modifier = Modifier.padding(start = 6.dp, bottom = 10.dp)
         )
@@ -454,43 +468,49 @@ fun AppsTab(vm: RemoteViewModel, s: UiState) {
 
 @Composable
 private fun AppCard(app: TvApp, pinned: Boolean, onClick: () -> Unit, onLongPress: () -> Unit) {
-    Column {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box {
             PressSurface(
                 onClick,
                 Modifier
                     .fillMaxWidth()
-                    .aspectRatio(16f / 10f),
-                shape = RoundedCornerShape(16.dp),
+                    .aspectRatio(16f / 9f),
+                shape = RoundedCornerShape(14.dp),
                 background = SolidColor(Glass),
                 onLongPress = onLongPress
             ) {
                 if (app.bannerUrl != null) {
-                    RemoteImage(app.bannerUrl, Modifier.fillMaxSize(), ContentScale.Crop) {
-                        RemoteImage(app.iconUrl, Modifier.size(40.dp)) { LetterBadge(app.label, 40.dp) }
+                    // TV banners are 16:9 — show them whole, never cropped
+                    RemoteImage(app.bannerUrl, Modifier.fillMaxSize(), ContentScale.Fit) {
+                        RemoteImage(app.iconUrl, Modifier.size(32.dp)) { LetterBadge(app.label, 32.dp) }
                     }
                 } else {
-                    RemoteImage(app.iconUrl, Modifier.size(42.dp)) { LetterBadge(app.label, 42.dp) }
+                    RemoteImage(app.iconUrl, Modifier.size(34.dp)) { LetterBadge(app.label, 34.dp) }
                 }
             }
             if (pinned) {
                 Box(
                     Modifier
                         .align(Alignment.TopEnd)
-                        .padding(6.dp)
-                        .size(22.dp)
+                        .padding(5.dp)
+                        .size(20.dp)
                         .clip(CircleShape)
                         .background(AccentBrush),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(Icons.Rounded.PushPin, "Pinned", tint = Color(0xFF1B1408), modifier = Modifier.size(13.dp))
+                    Icon(Icons.Rounded.PushPin, "Pinned", tint = Color(0xFF1B1408), modifier = Modifier.size(12.dp))
                 }
             }
         }
         VSpace(6)
         Text(
-            app.label, color = TextHi, fontSize = 12.sp, maxLines = 1,
-            overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 2.dp)
+            app.label,
+            color = TextHi,
+            fontSize = 11.5.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp)
         )
     }
 }
