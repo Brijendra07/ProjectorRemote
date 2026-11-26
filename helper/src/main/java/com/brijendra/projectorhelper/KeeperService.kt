@@ -10,10 +10,13 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.provider.Settings
 import org.json.JSONObject
+import java.net.URLDecoder
 import java.net.ServerSocket
 import java.net.Socket
 import kotlin.concurrent.thread
@@ -118,31 +121,73 @@ class KeeperService : Service() {
 
     private fun answer(socket: Socket) {
         socket.use { sock ->
-            sock.soTimeout = 3_000
+            sock.soTimeout = 5_000
             val reader = sock.getInputStream().bufferedReader()
             val requestLine = reader.readLine() ?: return
-            // Skip headers
             while (true) {
                 val line = reader.readLine() ?: break
                 if (line.isEmpty()) break
             }
-            if (requestLine.contains("/enable")) AdbWifi.ensureEnabled(this)
+            // "GET /path?query HTTP/1.1"
+            val target = requestLine.split(" ").getOrNull(1) ?: "/"
+            val path = target.substringBefore('?')
+            val query = target.substringAfter('?', "")
+                .split('&')
+                .mapNotNull {
+                    val k = it.substringBefore('=', "")
+                    if (k.isEmpty()) null else k to URLDecoder.decode(it.substringAfter('='), "UTF-8")
+                }
+                .toMap()
 
-            val body = JSONObject()
-                .put("app", "ProjectorHelper")
-                .put("ip", AdbWifi.ip(this) ?: "")
-                .put("port", AdbWifi.port() ?: mdnsPort ?: 0)
-                .put("adbWifi", AdbWifi.isEnabled(this))
-                .put("permission", AdbWifi.hasPermission(this))
-                .toString()
-            val bytes = body.toByteArray()
-            val head = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" +
-                "Content-Length: ${bytes.size}\r\nConnection: close\r\n\r\n"
-            sock.getOutputStream().apply {
-                write(head.toByteArray())
-                write(bytes)
-                flush()
+            when (path) {
+                "/apps" -> send(sock, "application/json",
+                    AppsProvider.list(this).toString().toByteArray())
+                "/icon" -> {
+                    val png = query["pkg"]?.let { AppsProvider.iconPng(this, it) }
+                    if (png != null) send(sock, "image/png", png) else notFound(sock)
+                }
+                "/banner" -> {
+                    val png = query["c"]?.let { AppsProvider.bannerPng(this, it) }
+                    if (png != null) send(sock, "image/png", png) else notFound(sock)
+                }
+                else -> {
+                    if (path == "/enable") AdbWifi.ensureEnabled(this)
+                    val body = JSONObject()
+                        .put("app", "ProjectorHelper")
+                        .put("version", VERSION)
+                        .put("name", deviceName())
+                        .put("ip", AdbWifi.ip(this) ?: "")
+                        .put("port", AdbWifi.port() ?: mdnsPort ?: 0)
+                        .put("adbWifi", AdbWifi.isEnabled(this))
+                        .put("permission", AdbWifi.hasPermission(this))
+                        .toString()
+                    send(sock, "application/json", body.toByteArray())
+                }
             }
+        }
+    }
+
+    private fun deviceName(): String {
+        val global = try {
+            Settings.Global.getString(contentResolver, "device_name")
+        } catch (_: Throwable) { null }
+        return global?.takeIf { it.isNotBlank() } ?: Build.MODEL ?: "Projector"
+    }
+
+    private fun send(sock: Socket, type: String, bytes: ByteArray) {
+        val head = "HTTP/1.1 200 OK\r\nContent-Type: $type\r\n" +
+            "Content-Length: ${bytes.size}\r\nCache-Control: max-age=3600\r\nConnection: close\r\n\r\n"
+        sock.getOutputStream().apply {
+            write(head.toByteArray())
+            write(bytes)
+            flush()
+        }
+    }
+
+    private fun notFound(sock: Socket) {
+        sock.getOutputStream().apply {
+            write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+            flush()
         }
     }
 
@@ -161,6 +206,7 @@ class KeeperService : Service() {
 
     companion object {
         const val PORT = 8765
+        const val VERSION = 2
         private const val CHANNEL = "keeper"
 
         fun start(ctx: Context) {

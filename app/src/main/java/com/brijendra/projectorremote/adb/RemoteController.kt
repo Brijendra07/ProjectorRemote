@@ -11,7 +11,13 @@ import java.util.concurrent.Executors
 import kotlin.concurrent.thread
 
 /** A launchable app on the projector. */
-data class TvApp(val pkg: String, val component: String, val label: String)
+data class TvApp(
+    val pkg: String,
+    val component: String,
+    val label: String,
+    val iconUrl: String? = null,
+    val bannerUrl: String? = null,
+)
 
 /**
  * Sends commands to the projector over Wireless debugging (ADB).

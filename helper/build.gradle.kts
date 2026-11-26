@@ -12,8 +12,8 @@ android {
         minSdk = 26
         // 33 keeps foreground-service rules simple on the projector (Android 14).
         targetSdk = 33
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "2.0"
     }
 
     // Fixed signing key so new builds install over old ones (keeps the pairing).

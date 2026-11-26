@@ -7,7 +7,9 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
+import java.net.URLEncoder
 import java.net.HttpURLConnection
 import java.net.Inet4Address
 import java.net.InetSocketAddress
@@ -21,7 +23,16 @@ object HelperClient {
     const val APK_URL =
         "https://github.com/Brijendra07/ProjectorRemote/releases/latest/download/ProjectorHelper-debug.apk"
 
-    data class Info(val ip: String, val port: Int?, val adbWifi: Boolean, val permission: Boolean)
+    const val LATEST_VERSION = 2
+
+    data class Info(
+        val ip: String,
+        val port: Int?,
+        val adbWifi: Boolean,
+        val permission: Boolean,
+        val version: Int,
+        val name: String?,
+    )
 
     /** Ask the helper at [ip]. Returns null if no helper answers there. */
     suspend fun query(ip: String, timeoutMs: Int = 1500, enable: Boolean = false): Info? =
@@ -40,11 +51,41 @@ object HelperClient {
                     port = j.optInt("port", 0).takeIf { it > 0 },
                     adbWifi = j.optBoolean("adbWifi"),
                     permission = j.optBoolean("permission"),
+                    version = j.optInt("version", 1),
+                    name = j.optString("name").ifBlank { null },
                 )
             } catch (_: Exception) {
                 null
             }
         }
+
+    /** Apps with real names, icons and banners (helper v2+). Null if the helper can't list them. */
+    suspend fun apps(ip: String): List<TvApp>? = withContext(Dispatchers.IO) {
+        try {
+            val c = URL("http://$ip:$PORT/apps").openConnection() as HttpURLConnection
+            c.connectTimeout = 2500
+            c.readTimeout = 5000
+            val text = c.inputStream.bufferedReader().use { it.readText() }.trim()
+            c.disconnect()
+            if (!text.startsWith("[")) return@withContext null
+            val arr = JSONArray(text)
+            (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                val pkg = o.getString("pkg")
+                val component = o.getString("component")
+                TvApp(
+                    pkg = pkg,
+                    component = component,
+                    label = o.optString("label").ifBlank { RemoteController.friendlyName(pkg) },
+                    iconUrl = "http://$ip:$PORT/icon?pkg=" + URLEncoder.encode(pkg, "UTF-8"),
+                    bannerUrl = if (o.optBoolean("banner"))
+                        "http://$ip:$PORT/banner?c=" + URLEncoder.encode(component, "UTF-8") else null,
+                )
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     /** Scan the phone's Wi-Fi subnet (x.x.x.1–254) for the helper. Takes ~2 seconds. */
     suspend fun scan(context: Context): Info? = coroutineScope {

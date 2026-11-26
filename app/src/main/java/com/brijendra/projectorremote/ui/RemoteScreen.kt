@@ -1,10 +1,15 @@
 package com.brijendra.projectorremote.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,34 +18,27 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Apps
+import androidx.compose.material.icons.rounded.Keyboard
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.SettingsRemote
+import androidx.compose.material.icons.rounded.TouchApp
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -48,555 +46,197 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brijendra.projectorremote.Conn
 import com.brijendra.projectorremote.RemoteViewModel
+import com.brijendra.projectorremote.UiState
 import kotlinx.coroutines.delay
-import kotlin.math.abs
 
-// Android key codes
-private const val K_UP = 19
-private const val K_DOWN = 20
-private const val K_LEFT = 21
-private const val K_RIGHT = 22
-private const val K_OK = 23
-private const val K_HOME = 3
-private const val K_BACK = 4
-private const val K_MENU = 82
-private const val K_POWER = 26
-private const val K_VOL_UP = 24
-private const val K_VOL_DOWN = 25
-private const val K_MUTE = 164
-private const val K_PLAY_PAUSE = 85
-private const val K_REWIND = 89
-private const val K_FFWD = 90
-private const val K_SETTINGS = 176
-private const val K_DEL = 67
-private const val K_ENTER = 66
-private const val K_SEARCH = 84
-private const val K_RECENTS = 187
-
-private enum class Tab(val title: String) { REMOTE("Remote"), PAD("Pad"), TYPE("Type"), APPS("Apps"), AUTO("Auto") }
+private enum class Tab(val label: String, val icon: ImageVector) {
+    REMOTE("Remote", Icons.Rounded.SettingsRemote),
+    PAD("Touchpad", Icons.Rounded.TouchApp),
+    APPS("Apps", Icons.Rounded.Apps),
+    KEYS("Keyboard", Icons.Rounded.Keyboard),
+}
 
 @Composable
 fun RemoteScreen(vm: RemoteViewModel) {
     val s by vm.state.collectAsState()
     var tab by rememberSaveable { mutableStateOf(Tab.REMOTE) }
+    var showSettings by rememberSaveable { mutableStateOf(false) }
+    val firstRun = s.host.isBlank() && s.conn != Conn.CONNECTED
 
-    // Auto-hide status messages
-    LaunchedEffect(s.message) {
-        if (s.message != null) {
-            delay(4000)
-            vm.clearMessage()
-        }
-    }
+    BackHandler(enabled = showSettings && !firstRun) { showSettings = false }
 
-    Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
-        Column(
+    CompositionLocalProvider(LocalHapticsEnabled provides s.haptics) {
+        Box(
             Modifier
                 .fillMaxSize()
-                .safeDrawingPadding()
-                .padding(horizontal = 16.dp)
+                .background(BackgroundBrush)
         ) {
-            Header(s.conn, s.host, onConnect = vm::connect, onDisconnect = vm::disconnect)
+            // Soft warm glow in the corner
+            Box(
+                Modifier
+                    .size(420.dp)
+                    .offset((-140).dp, (-160).dp)
+                    .background(
+                        Brush.radialGradient(listOf(Amber.copy(alpha = 0.13f), Color.Transparent))
+                    )
+            )
 
-            s.message?.let {
-                Text(
-                    it,
-                    color = TextDim,
-                    fontSize = 13.sp,
-                    modifier = Modifier.padding(vertical = 4.dp)
-                )
-            }
-
-            if (s.conn != Conn.CONNECTED) {
-                SetupCard(
-                    host = s.host,
-                    port = s.port,
-                    busy = s.conn == Conn.CONNECTING,
-                    onHost = vm::setHost,
-                    onPort = vm::setPort,
-                    onConnect = vm::connect,
-                    onPair = vm::pair
+            if (showSettings || firstRun) {
+                SettingsScreen(
+                    vm = vm,
+                    s = s,
+                    firstRun = firstRun,
+                    onBack = { showSettings = false }
                 )
             } else {
-                TabRow(tab) { tab = it }
-                Spacer(Modifier.height(12.dp))
-
-                when (tab) {
-                    Tab.REMOTE -> RemotePad(vm)
-                    Tab.PAD -> TouchPad(vm)
-                    Tab.TYPE -> TypePad(vm)
-                    Tab.APPS -> AppsPad(vm, s.apps, s.loadingApps)
-                    Tab.AUTO -> AutoPad(vm, s.helperBusy, s.helperLog, s.helperStatus)
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding()
+                ) {
+                    TopBar(s, onSettings = { showSettings = true })
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp)
+                    ) {
+                        Crossfade(targetState = tab, label = "tab") { t ->
+                            when (t) {
+                                Tab.REMOTE -> RemoteTab(vm, s)
+                                Tab.PAD -> TouchpadTab(vm)
+                                Tab.APPS -> AppsTab(vm, s)
+                                Tab.KEYS -> KeyboardTab(vm)
+                            }
+                        }
+                    }
+                    BottomBar(tab) { tab = it }
                 }
             }
+
+            Toast(s.message, onDone = vm::clearMessage)
         }
     }
 }
 
 @Composable
-private fun Header(conn: Conn, host: String, onConnect: () -> Unit, onDisconnect: () -> Unit) {
+private fun TopBar(s: UiState, onSettings: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(vertical = 12.dp),
+            .padding(start = 24.dp, end = 16.dp, top = 12.dp, bottom = 16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f)) {
-            Text("Projector Remote", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                val color = when (conn) {
-                    Conn.CONNECTED -> Color(0xFF4ADE80)
-                    Conn.CONNECTING -> Accent
-                    Conn.DISCONNECTED -> Color(0xFFF87171)
-                }
-                Box(
-                    Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(color)
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    when (conn) {
-                        Conn.CONNECTED -> "Connected · $host"
-                        Conn.CONNECTING -> "Connecting…"
-                        Conn.DISCONNECTED -> "Not connected"
-                    },
-                    color = TextDim,
-                    fontSize = 13.sp
-                )
+            Text(
+                s.deviceName ?: "Projector",
+                style = MaterialTheme.typography.headlineSmall,
+                color = TextHi,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(6.dp))
+            when {
+                s.conn == Conn.CONNECTED -> StatusPill("Connected · ${s.host}", Mint, pulsing = false)
+                s.message == "Disconnected" -> StatusPill("Disconnected", Rose, pulsing = false)
+                else -> StatusPill("Searching for projector…", Amber, pulsing = true)
             }
         }
-        when (conn) {
-            Conn.CONNECTED -> TextButton(onClick = onDisconnect) { Text("Disconnect") }
-            Conn.CONNECTING -> CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-            Conn.DISCONNECTED -> if (host.isNotBlank()) TextButton(onClick = onConnect) { Text("Reconnect") }
-        }
+        IconKey(
+            icon = Icons.Rounded.Settings,
+            label = "Settings",
+            onPress = onSettings,
+            size = 46.dp,
+            tint = TextDim
+        )
     }
 }
 
 @Composable
-private fun SetupCard(
-    host: String,
-    port: String,
-    busy: Boolean,
-    onHost: (String) -> Unit,
-    onPort: (String) -> Unit,
-    onConnect: () -> Unit,
-    onPair: (String, String) -> Unit,
-) {
-    var pairPort by rememberSaveable { mutableStateOf("") }
-    var code by rememberSaveable { mutableStateOf("") }
-
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-    ) {
-        Card {
-            Text("1. Projector address", fontWeight = FontWeight.SemiBold)
-            Text(
-                "On the projector: Developer options → Wireless debugging → \"IP address & Port\"",
-                color = TextDim, fontSize = 13.sp
-            )
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = host, onValueChange = onHost, singleLine = true,
-                label = { Text("IP address (e.g. 192.168.1.9)") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = port, onValueChange = onPort, singleLine = true,
-                label = { Text("Port (e.g. 40923)") },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-
-        Spacer(Modifier.height(12.dp))
-
-        Card {
-            Text("2. First time only: pair", fontWeight = FontWeight.SemiBold)
-            Text(
-                "On the projector tap \"Pair device with pairing code\". Enter the port shown in that " +
-                    "pop-up (it's different from the one above) and the 6-digit code.",
-                color = TextDim, fontSize = 13.sp
-            )
-            Spacer(Modifier.height(8.dp))
-            Row {
-                OutlinedTextField(
-                    value = pairPort, onValueChange = { pairPort = it.filter(Char::isDigit) },
-                    singleLine = true, label = { Text("Pairing port") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(8.dp))
-                OutlinedTextField(
-                    value = code, onValueChange = { code = it.filter(Char::isDigit).take(6) },
-                    singleLine = true, label = { Text("6-digit code") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                    modifier = Modifier.weight(1f)
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            Button(
-                onClick = { onPair(pairPort, code) },
-                enabled = !busy,
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("Pair & connect") }
-        }
-
-        Spacer(Modifier.height(12.dp))
-
-        OutlinedButton(onClick = onConnect, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-            Text("Already paired? Connect")
-        }
-        Spacer(Modifier.height(24.dp))
-    }
-}
-
-@Composable
-private fun Card(content: @Composable () -> Unit) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(Surface1)
-            .padding(16.dp)
-    ) { content() }
-}
-
-@Composable
-private fun TabRow(selected: Tab, onSelect: (Tab) -> Unit) {
+private fun BottomBar(selected: Tab, onSelect: (Tab) -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(Surface1)
-            .padding(4.dp)
+            .navigationBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .clip(RoundedCornerShape(26.dp))
+            .background(Glass.copy(alpha = 0.92f))
+            .padding(6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Tab.entries.forEach { t ->
             val on = t == selected
-            Box(
+            Column(
                 Modifier
                     .weight(1f)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(if (on) Surface2 else Color.Transparent)
-                    .clickable { onSelect(t) }
-                    .padding(vertical = 10.dp),
-                contentAlignment = Alignment.Center
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(if (on) GlassHi else Color.Transparent)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onSelect(t) }
+                    .padding(vertical = 9.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(t.title, color = if (on) Accent else TextDim, fontSize = 14.sp)
-            }
-        }
-    }
-}
-
-/** A round/rounded key that vibrates and sends a key code. */
-@Composable
-private fun Key(
-    label: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    size: Int = 64,
-    circle: Boolean = true,
-    accent: Boolean = false,
-    fontSize: Int = 20,
-    onLongClick: (() -> Unit)? = null,
-) {
-    val haptic = LocalHapticFeedback.current
-    Box(
-        modifier
-            .size(size.dp)
-            .clip(if (circle) CircleShape else RoundedCornerShape(16.dp))
-            .background(if (accent) Accent else Surface2)
-            .pointerInput(onClick, onLongClick) {
-                detectTapGestures(
-                    onTap = {
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        onClick()
-                    },
-                    onLongPress = onLongClick?.let { lc ->
-                        {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            lc()
-                        }
-                    }
+                Icon(
+                    t.icon,
+                    contentDescription = t.label,
+                    tint = if (on) Amber else TextFaint,
+                    modifier = Modifier.size(22.dp)
                 )
-            },
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            label,
-            fontSize = fontSize.sp,
-            color = if (accent) Surface1 else Color.White,
-            fontWeight = FontWeight.SemiBold,
-            textAlign = TextAlign.Center
-        )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    t.label,
+                    fontSize = 11.sp,
+                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium,
+                    color = if (on) TextHi else TextFaint
+                )
+            }
+        }
     }
 }
 
 @Composable
-private fun RemotePad(vm: RemoteViewModel) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState()),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            Key("⏻", { vm.key(K_POWER) }, fontSize = 22)
-            Key("⌂", { vm.key(K_HOME) }, fontSize = 26)
-            Key("↩", { vm.key(K_BACK) }, fontSize = 24)
-            Key("☰", { vm.key(K_MENU) }, onLongClick = { vm.key(K_RECENTS) })
-            Key("⚙", { vm.key(K_SETTINGS) })
+private fun Toast(message: String?, onDone: () -> Unit) {
+    LaunchedEffect(message) {
+        if (message != null) {
+            delay(2600)
+            onDone()
         }
-
-        Spacer(Modifier.height(24.dp))
-
-        // D-pad
-        Box(
-            Modifier
-                .size(260.dp)
-                .clip(CircleShape)
-                .background(Surface1)
-                .border(1.dp, Surface2, CircleShape)
-        ) {
-            Key("▲", { vm.key(K_UP) }, Modifier.align(Alignment.TopCenter).padding(top = 8.dp), circle = true, size = 72)
-            Key("▼", { vm.key(K_DOWN) }, Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp), size = 72)
-            Key("◀", { vm.key(K_LEFT) }, Modifier.align(Alignment.CenterStart).padding(start = 8.dp), size = 72)
-            Key("▶", { vm.key(K_RIGHT) }, Modifier.align(Alignment.CenterEnd).padding(end = 8.dp), size = 72)
-            Key("OK", { vm.key(K_OK) }, Modifier.align(Alignment.Center), size = 88, accent = true,
-                onLongClick = { vm.longKey(K_OK) })
-        }
-
-        Spacer(Modifier.height(24.dp))
-
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Key("+", { vm.key(K_VOL_UP) }, circle = false, size = 60, fontSize = 26)
-                Spacer(Modifier.height(6.dp))
-                Text("VOL", color = TextDim, fontSize = 12.sp)
-                Spacer(Modifier.height(6.dp))
-                Key("−", { vm.key(K_VOL_DOWN) }, circle = false, size = 60, fontSize = 26)
-            }
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Row {
-                    Key("⏪", { vm.key(K_REWIND) }, size = 56, fontSize = 18)
-                    Spacer(Modifier.width(8.dp))
-                    Key("⏯", { vm.key(K_PLAY_PAUSE) }, size = 56, fontSize = 18)
-                    Spacer(Modifier.width(8.dp))
-                    Key("⏩", { vm.key(K_FFWD) }, size = 56, fontSize = 18)
-                }
-                Spacer(Modifier.height(12.dp))
-                Key("🔇", { vm.key(K_MUTE) }, size = 56, fontSize = 18)
-            }
-        }
-        Spacer(Modifier.height(24.dp))
     }
-}
-
-/** Swipe to move (each step = one arrow press), tap = OK, long-press = Back. */
-@Composable
-private fun TouchPad(vm: RemoteViewModel) {
-    val haptic = LocalHapticFeedback.current
-    val stepPx = with(LocalDensity.current) { 48.dp.toPx() }
-    var dx by remember { mutableFloatStateOf(0f) }
-    var dy by remember { mutableFloatStateOf(0f) }
-
-    Column {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(380.dp)
-                .clip(RoundedCornerShape(24.dp))
-                .background(Surface1)
-                .border(1.dp, Surface2, RoundedCornerShape(24.dp))
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onTap = {
-                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            vm.key(K_OK)
-                        },
-                        onDoubleTap = { vm.key(K_PLAY_PAUSE) },
-                        onLongPress = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            vm.key(K_BACK)
-                        }
-                    )
-                }
-                .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = { dx = 0f; dy = 0f },
-                        onDragEnd = { dx = 0f; dy = 0f },
-                        onDrag = { change, amount ->
-                            change.consume()
-                            dx += amount.x
-                            dy += amount.y
-                            if (abs(dx) >= stepPx || abs(dy) >= stepPx) {
-                                val code = if (abs(dx) > abs(dy)) {
-                                    if (dx > 0) K_RIGHT else K_LEFT
-                                } else {
-                                    if (dy > 0) K_DOWN else K_UP
-                                }
-                                vm.key(code)
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                dx = 0f; dy = 0f
-                            }
-                        }
-                    )
-                },
-            contentAlignment = Alignment.Center
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+        AnimatedVisibility(
+            visible = message != null,
+            enter = fadeIn() + slideInVertically { it / 2 },
+            exit = fadeOut() + slideOutVertically { it / 2 },
         ) {
             Text(
-                "Swipe to move\nTap = OK · Double-tap = Play/Pause\nHold = Back",
-                color = TextDim, textAlign = TextAlign.Center, fontSize = 14.sp
+                message ?: "",
+                color = TextHi,
+                fontSize = 13.sp,
+                modifier = Modifier
+                    .navigationBarsPadding()
+                    .padding(bottom = 96.dp, start = 24.dp, end = 24.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(GlassHi)
+                    .padding(horizontal = 18.dp, vertical = 11.dp)
             )
         }
-        Spacer(Modifier.height(16.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            Key("↩", { vm.key(K_BACK) }, fontSize = 24)
-            Key("⌂", { vm.key(K_HOME) }, fontSize = 26)
-            Key("−", { vm.key(K_VOL_DOWN) }, fontSize = 26)
-            Key("+", { vm.key(K_VOL_UP) }, fontSize = 26)
-        }
     }
 }
 
+// Spacer helper used by tab files
 @Composable
-private fun TypePad(vm: RemoteViewModel) {
-    var text by rememberSaveable { mutableStateOf("") }
-    Column(Modifier.fillMaxWidth()) {
-        Text(
-            "Select a search box on the projector first, then type here.",
-            color = TextDim, fontSize = 13.sp
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = text,
-            onValueChange = { text = it },
-            label = { Text("Text to send") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-            keyboardActions = KeyboardActions(onSend = { vm.text(text); text = "" }),
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(8.dp))
-        Button(
-            onClick = { vm.text(text); text = "" },
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.buttonColors(containerColor = Accent)
-        ) { Text("Send text") }
-        Spacer(Modifier.height(16.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            Key("⌫", { vm.key(K_DEL) }, circle = false, onLongClick = { repeat(15) { vm.key(K_DEL) } })
-            Key("⏎", { vm.key(K_ENTER) }, circle = false)
-            Key("🔍", { vm.key(K_SEARCH) }, circle = false, fontSize = 18)
-            Key("↩", { vm.key(K_BACK) }, circle = false)
-        }
-        Spacer(Modifier.height(8.dp))
-        Text("Hold ⌫ to delete 15 characters", color = TextDim, fontSize = 12.sp)
-    }
-}
+internal fun HSpace(w: Int) = Spacer(Modifier.width(w.dp))
 
 @Composable
-private fun AppsPad(vm: RemoteViewModel, apps: List<com.brijendra.projectorremote.adb.TvApp>, loading: Boolean) {
-    Column(Modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Apps on projector", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-            TextButton(onClick = vm::loadApps) { Text(if (loading) "Loading…" else "Refresh") }
-        }
-        if (apps.isEmpty() && !loading) {
-            Text("No apps found yet. Tap Refresh.", color = TextDim, fontSize = 13.sp)
-        }
-        LazyVerticalGrid(
-            columns = GridCells.Fixed(3),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            items(apps, key = { it.pkg }) { app ->
-                Box(
-                    Modifier
-                        .height(72.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(Surface1)
-                        .clickable { vm.launch(app) }
-                        .padding(8.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        app.label,
-                        textAlign = TextAlign.Center,
-                        fontSize = 13.sp,
-                        maxLines = 2
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AutoPad(vm: RemoteViewModel, busy: Boolean, log: List<String>, status: String?) {
-    LaunchedEffect(Unit) { vm.checkHelper() }
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-    ) {
-        Card {
-            Text("Auto-start after restart", fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "Installs a small helper on the projector. After every restart it switches " +
-                    "Wireless debugging on by itself, and tells this app the new IP and port. " +
-                    "No projector remote needed.",
-                color = TextDim, fontSize = 13.sp
-            )
-            Spacer(Modifier.height(12.dp))
-            Text("Status: ${status ?: "checking…"}", fontSize = 14.sp)
-            Spacer(Modifier.height(12.dp))
-            Button(
-                onClick = { vm.setupHelper() },
-                enabled = !busy,
-                modifier = Modifier.fillMaxWidth()
-            ) { Text(if (busy) "Working…" else "Set up auto-start") }
-            Spacer(Modifier.height(8.dp))
-            Row {
-                OutlinedButton(onClick = vm::checkHelper, enabled = !busy, modifier = Modifier.weight(1f)) {
-                    Text("Check status")
-                }
-                Spacer(Modifier.width(8.dp))
-                OutlinedButton(onClick = { vm.setupHelper(forceReinstall = true) }, enabled = !busy, modifier = Modifier.weight(1f)) {
-                    Text("Reinstall")
-                }
-            }
-        }
-        if (log.isNotEmpty()) {
-            Spacer(Modifier.height(12.dp))
-            Card {
-                log.forEach { Text("• $it", fontSize = 13.sp, color = TextDim) }
-            }
-        }
-        Spacer(Modifier.height(24.dp))
-    }
-}
+internal fun VSpace(h: Int) = Spacer(Modifier.height(h.dp))
