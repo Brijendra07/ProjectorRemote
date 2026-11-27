@@ -12,8 +12,8 @@ android {
         applicationId = "com.brijendra.projectorremote"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "3.6"
+        versionCode = 14
+        versionName = "3.7"
     }
 
     // Fixed signing key so new builds install over old ones (keeps the pairing).

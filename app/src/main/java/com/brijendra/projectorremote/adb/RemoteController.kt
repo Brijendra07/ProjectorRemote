@@ -26,6 +26,25 @@ data class TvApp(
     val bannerUrl: String? = null,
 )
 
+/** What the projector is showing right now. */
+data class NowPlaying(
+    val screenOn: Boolean = true,
+    /** Foreground app package. */
+    val topPkg: String? = null,
+    /** Package of the app that owns the media session (may differ from topPkg). */
+    val mediaPkg: String? = null,
+    val title: String? = null,
+    val subtitle: String? = null,
+    /** true = playing, false = paused/stopped, null = no media session. */
+    val playing: Boolean? = null,
+    val positionMs: Long? = null,
+    /** Phone clock (elapsedRealtime) when positionMs was valid, to tick locally. */
+    val fetchedAt: Long = 0,
+) {
+    val pkg: String? get() = mediaPkg ?: topPkg
+    val hasMedia: Boolean get() = playing != null
+}
+
 /**
  * Sends commands to the projector over Wireless debugging (ADB).
  * All calls run on one background thread, in order.
@@ -150,6 +169,17 @@ class RemoteController private constructor(context: Context) {
             .filterNot { it.pkg.startsWith("com.android.") && it.pkg != "com.android.vending" }
             .sortedWith(compareBy<TvApp>({ !KNOWN.containsKey(it.pkg) }, { it.label.lowercase() }))
             .toList()
+    }
+
+    /** What's on screen: foreground app, and the active media session (title, playing, position). */
+    suspend fun nowPlaying(): NowPlaying = op(8_000) {
+        parseNowPlaying(
+            exec(
+                "dumpsys media_session; echo '##UP'; cat /proc/uptime; " +
+                    "echo '##TOP'; dumpsys activity activities | grep -m2 -E 'ResumedActivity'; " +
+                    "echo '##PWR'; dumpsys power | grep -m1 -E 'mWakefulness='"
+            )
+        )
     }
 
     /** Runs one shell command and returns its output. */
@@ -280,6 +310,76 @@ class RemoteController private constructor(context: Context) {
             instance ?: synchronized(this) {
                 instance ?: RemoteController(context.applicationContext).also { instance = it }
             }
+
+        /** Parses `dumpsys media_session` + uptime + resumed activity + wakefulness. */
+        fun parseNowPlaying(out: String): NowPlaying {
+            val media = out.substringBefore("##UP")
+            val uptimeMs = out.substringAfter("##UP", "").trim().split(Regex("\\s+")).firstOrNull()
+                ?.toDoubleOrNull()?.times(1000)?.toLong()
+            val top = out.substringAfter("##TOP", "").substringBefore("##PWR")
+            val topPkg = Regex("""\s([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+)/""").find(top)?.groupValues?.get(1)
+            val pwr = out.substringAfter("##PWR", "")
+            val screenOn = !pwr.contains("mWakefulness=") || pwr.contains("mWakefulness=Awake")
+
+            class S(val pkg: String) {
+                var active = false
+                var state = -1
+                var pos = -1L
+                var speed = 1f
+                var updated = -1L
+                var title: String? = null
+                var sub: String? = null
+            }
+            val sessions = mutableListOf<S>()
+            var cur: S? = null
+            for (raw in media.lines()) {
+                val l = raw.trim()
+                when {
+                    l.startsWith("package=") -> cur = S(l.removePrefix("package=").trim()).also { sessions += it }
+                    cur == null -> {}
+                    l.startsWith("active=") -> cur.active = l.removePrefix("active=").trim() == "true"
+                    l.startsWith("state=PlaybackState") -> {
+                        fun num(k: String) = Regex("""[{ ,]$k=(-?[0-9.]+)""").find(l)?.groupValues?.get(1)
+                        cur.state = num("state")?.toIntOrNull() ?: -1
+                        cur.pos = num("position")?.toLongOrNull() ?: -1
+                        cur.speed = num("speed")?.toFloatOrNull() ?: 1f
+                        cur.updated = num("updated")?.toLongOrNull() ?: -1
+                    }
+                    l.startsWith("metadata:") && l.contains("description=") -> {
+                        val parts = l.substringAfter("description=").split(", ")
+                            .map { it.trim() }
+                        val clean = { v: String? -> v?.takeUnless { it.isBlank() || it == "null" } }
+                        if (parts.size >= 3) {
+                            cur.title = clean(parts.dropLast(2).joinToString(", "))
+                            cur.sub = clean(parts[parts.size - 2])
+                        } else {
+                            cur.title = clean(parts.firstOrNull())
+                            cur.sub = clean(parts.getOrNull(1))
+                        }
+                    }
+                }
+            }
+            // 3 = playing, 6 = buffering, 2 = paused
+            val s = sessions.firstOrNull { it.state == 3 || it.state == 6 }
+                ?: sessions.firstOrNull { it.active && it.state == 2 }
+                ?: sessions.firstOrNull { it.state == 2 && it.pkg == topPkg }
+            if (s == null) return NowPlaying(screenOn, topPkg, fetchedAt = android.os.SystemClock.elapsedRealtime())
+            val playing = s.state == 3 || s.state == 6
+            var pos = s.pos.takeIf { it >= 0 }
+            if (pos != null && playing && s.state == 3 && uptimeMs != null && s.updated > 0) {
+                pos += ((uptimeMs - s.updated).coerceAtLeast(0) * s.speed).toLong()
+            }
+            return NowPlaying(
+                screenOn = screenOn,
+                topPkg = topPkg,
+                mediaPkg = s.pkg,
+                title = s.title,
+                subtitle = s.sub,
+                playing = playing,
+                positionMs = pos,
+                fetchedAt = android.os.SystemClock.elapsedRealtime(),
+            )
+        }
 
         fun youtubeId(url: String): String? {
             val patterns = listOf(

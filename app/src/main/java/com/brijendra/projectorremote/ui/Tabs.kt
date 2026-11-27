@@ -48,6 +48,16 @@ import androidx.compose.material.icons.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Tv
+import androidx.compose.material.icons.rounded.TvOff
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Refresh
@@ -124,10 +134,18 @@ object K {
 @Composable
 fun RemoteTab(vm: RemoteViewModel, s: UiState) {
     val on = s.conn == Conn.CONNECTED
+    DisposableEffect(Unit) {
+        vm.watchNowPlaying(true)
+        onDispose { vm.watchNowPlaying(false) }
+    }
+    val playing = s.nowPlaying?.playing == true
     Column(
         Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        NowPlayingCard(vm, s)
+        VSpace(14)
+
         // Navigation keys
         Row(
             Modifier.fillMaxWidth(),
@@ -164,7 +182,7 @@ fun RemoteTab(vm: RemoteViewModel, s: UiState) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconKey(Icons.Rounded.FastRewind, "Rewind", { vm.key(K.REWIND) }, size = 48.dp, repeat = true, enabled = on)
                 IconKey(
-                    Icons.Rounded.PlayArrow, "Play / Pause", { vm.key(K.PLAY_PAUSE) },
+                    if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Play / Pause", vm::playPause,
                     size = 58.dp, tint = Color(0xFF1B1408), background = AccentBrush, enabled = on
                 )
                 IconKey(Icons.Rounded.FastForward, "Fast forward", { vm.key(K.FFWD) }, size = 48.dp, repeat = true, enabled = on)
@@ -174,6 +192,130 @@ fun RemoteTab(vm: RemoteViewModel, s: UiState) {
         VSpace(18)
         QuickLaunch(vm, s)
         VSpace(10)
+    }
+}
+
+// ============================ Now playing ============================
+
+private fun clock(ms: Long): String {
+    val t = ms / 1000
+    val h = t / 3600
+    val m = (t % 3600) / 60
+    val sec = t % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
+}
+
+/** Shows what's on the projector: a small picture of the screen, the app, the title, and play/pause. */
+@Composable
+private fun NowPlayingCard(vm: RemoteViewModel, s: UiState) {
+    val np = s.nowPlaying
+    val on = s.conn == Conn.CONNECTED
+    val screenOff = np != null && !np.screenOn
+
+    // Tick the time locally between checks.
+    var now by remember { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
+    LaunchedEffect(np?.playing) {
+        while (np?.playing == true) {
+            now = android.os.SystemClock.elapsedRealtime()
+            kotlinx.coroutines.delay(1000)
+        }
+    }
+    val pos = np?.positionMs?.let { p -> if (np.playing == true) p + (now - np.fetchedAt).coerceAtLeast(0) else p }
+
+    val app = vm.appLabel(np?.pkg)
+    val headline: String
+    val detail: String?
+    when {
+        !on -> { headline = "Not connected"; detail = "Waiting for the projector" }
+        np == null -> { headline = "Checking…"; detail = null }
+        screenOff -> { headline = "Projector is asleep"; detail = "Press power to wake it" }
+        np.hasMedia -> {
+            headline = np.title ?: app ?: "Playing"
+            detail = listOfNotNull(np.subtitle?.takeIf { it != headline }).firstOrNull()
+        }
+        else -> { headline = app ?: "Home screen"; detail = "Nothing playing" }
+    }
+    val status = when {
+        !on || np == null || screenOff -> null
+        np.playing == true -> "Playing"
+        np.playing == false -> "Paused"
+        else -> "On screen"
+    }
+
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(Glass.copy(alpha = 0.85f))
+            .border(1.dp, Stroke.copy(alpha = 0.7f), RoundedCornerShape(20.dp))
+            .padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Screen picture (tap to refresh)
+        Box(
+            Modifier
+                .width(104.dp)
+                .aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color.Black)
+                .border(1.dp, Stroke, RoundedCornerShape(12.dp))
+                .clickable(enabled = on && !screenOff) { vm.capturePreview() },
+            contentAlignment = Alignment.Center
+        ) {
+            val pic = s.preview
+            when {
+                screenOff || !on -> Icon(Icons.Rounded.TvOff, null, tint = TextFaint, modifier = Modifier.size(26.dp))
+                pic != null && !s.previewProtected ->
+                    Image(pic, "Projector screen", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                else -> {
+                    val icon = vm.appIcon(np?.pkg)
+                    if (icon != null) {
+                        RemoteImage(icon, Modifier.size(36.dp)) { Icon(Icons.Rounded.Tv, null, tint = TextFaint) }
+                    } else {
+                        Icon(if (s.previewProtected) Icons.Rounded.Lock else Icons.Rounded.Tv, null, tint = TextFaint, modifier = Modifier.size(24.dp))
+                    }
+                }
+            }
+            if (s.previewBusy) {
+                CircularProgressIndicator(
+                    Modifier.align(Alignment.BottomEnd).padding(5.dp).size(12.dp),
+                    color = Amber, strokeWidth = 2.dp
+                )
+            }
+        }
+        HSpace(12)
+        Column(Modifier.weight(1f)) {
+            if (status != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.size(7.dp).clip(CircleShape)
+                            .background(if (np?.playing == true) Mint else TextFaint)
+                    )
+                    HSpace(6)
+                    Text(
+                        listOfNotNull(app?.takeIf { np?.hasMedia == true }, status).joinToString(" · ") +
+                            (pos?.let { "  ${clock(it)}" } ?: ""),
+                        color = TextDim, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis
+                    )
+                }
+                VSpace(3)
+            }
+            Text(
+                headline, color = TextHi, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 19.sp
+            )
+            if (detail != null) {
+                Text(detail, color = TextFaint, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        if (np?.hasMedia == true && !screenOff) {
+            HSpace(8)
+            IconKey(
+                if (np.playing == true) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                "Play / Pause", vm::playPause,
+                size = 48.dp, tint = Color(0xFF1B1408), background = AccentBrush, enabled = on
+            )
+        }
     }
 }
 

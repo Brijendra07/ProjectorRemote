@@ -177,8 +177,63 @@ class Projector:
         m = re.search(r"([a-zA-Z0-9_.]+)/", focus)
         pkg = m.group(1) if m else None
         vol = self.volume_get()
-        return {"connected": True, "projector": self.serial, "screen_on": awake, "current_app": self.friendly(pkg) if pkg else None,
-                "current_package": pkg, "volume": vol}
+        res = {"connected": True, "projector": self.serial, "screen_on": awake, "current_app": self.friendly(pkg) if pkg else None,
+               "current_package": pkg, "volume": vol}
+        try:
+            res["now_playing"] = self.now_playing(pkg)
+        except Exception:
+            res["now_playing"] = None
+        return res
+
+    def now_playing(self, top_pkg=None):
+        """Active media session: app, title, playing/paused, position."""
+        out = self.sh("dumpsys media_session; echo '##UP'; cat /proc/uptime")
+        media, _, up = out.partition("##UP")
+        try:
+            uptime_ms = int(float(up.split()[0]) * 1000)
+        except Exception:
+            uptime_ms = None
+        sessions, cur = [], None
+        for raw in media.splitlines():
+            l = raw.strip()
+            if l.startswith("package="):
+                cur = {"pkg": l[8:].strip(), "active": False, "state": -1, "pos": -1, "speed": 1.0, "updated": -1,
+                       "title": None, "sub": None}
+                sessions.append(cur)
+            elif cur is None:
+                continue
+            elif l.startswith("active="):
+                cur["active"] = l[7:].strip() == "true"
+            elif l.startswith("state=PlaybackState"):
+                for k, cast in (("state", int), ("position", int), ("speed", float), ("updated", int)):
+                    m = re.search(r"[{ ,]%s=(-?[0-9.]+)" % k, l)
+                    if m:
+                        try:
+                            cur["pos" if k == "position" else k] = cast(float(m.group(1)))
+                        except ValueError:
+                            pass
+            elif l.startswith("metadata:") and "description=" in l:
+                parts = [p.strip() for p in l.split("description=", 1)[1].split(", ")]
+                clean = lambda v: None if (v is None or v in ("", "null")) else v
+                if len(parts) >= 3:
+                    cur["title"], cur["sub"] = clean(", ".join(parts[:-2])), clean(parts[-2])
+                else:
+                    cur["title"], cur["sub"] = clean(parts[0]), clean(parts[1] if len(parts) > 1 else None)
+        pick = (next((x for x in sessions if x["state"] in (3, 6)), None)
+                or next((x for x in sessions if x["active"] and x["state"] == 2), None)
+                or next((x for x in sessions if x["state"] == 2 and x["pkg"] == top_pkg), None))
+        if not pick:
+            return None
+        playing = pick["state"] in (3, 6)
+        pos = pick["pos"] if pick["pos"] >= 0 else None
+        if pos is not None and pick["state"] == 3 and uptime_ms and pick["updated"] > 0:
+            pos += int(max(0, uptime_ms - pick["updated"]) * pick["speed"])
+        r = {"app": self.friendly(pick["pkg"]), "title": pick["title"], "subtitle": pick["sub"],
+             "state": "playing" if playing else "paused"}
+        if pos is not None:
+            s = pos // 1000
+            r["position"] = "%d:%02d:%02d" % (s // 3600, s % 3600 // 60, s % 60) if s >= 3600 else "%d:%02d" % (s // 60, s % 60)
+        return r
 
     def volume_get(self):
         out = self.sh("cmd media_session volume --stream 3 --get 2>/dev/null")

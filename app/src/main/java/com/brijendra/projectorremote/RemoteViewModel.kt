@@ -11,6 +11,12 @@ import com.brijendra.projectorremote.media.Caster
 import com.brijendra.projectorremote.service.RemoteService
 import com.brijendra.projectorremote.adb.RemoteController
 import com.brijendra.projectorremote.adb.TvApp
+import com.brijendra.projectorremote.adb.NowPlaying
+import android.graphics.BitmapFactory
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -51,6 +57,12 @@ data class UiState(
     val restorable: List<Restorable>? = null,
     val doctor: DoctorResult? = null,
     val healthLog: List<String> = emptyList(),
+    // Now playing
+    val nowPlaying: NowPlaying? = null,
+    /** Small picture of the projector screen; null = not captured, protectedVideo = DRM (black). */
+    val preview: ImageBitmap? = null,
+    val previewProtected: Boolean = false,
+    val previewBusy: Boolean = false,
 ) {
     val favoriteApps: List<TvApp>
         get() = favorites.mapNotNull { f -> apps.firstOrNull { it.pkg == f } }
@@ -252,6 +264,86 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
     }
+
+    // ---------- Now playing ----------
+
+    private var npJob: Job? = null
+    private var previewKey: String? = null
+
+    /** Polls what's on the projector while the Remote tab is visible. */
+    fun watchNowPlaying(on: Boolean) {
+        npJob?.cancel()
+        if (!on) return
+        npJob = viewModelScope.launch {
+            while (true) {
+                if (inForeground && _state.value.conn == Conn.CONNECTED) refreshNowPlaying()
+                delay(3_000)
+            }
+        }
+    }
+
+    private suspend fun refreshNowPlaying() {
+        val np = try { remote.nowPlaying() } catch (_: Throwable) { return }
+        _state.update { it.copy(nowPlaying = np) }
+        // New app or new video → take a fresh picture of the screen.
+        val key = if (np.screenOn) "${np.pkg}|${np.title}" else "off"
+        if (key != previewKey) {
+            previewKey = key
+            if (np.screenOn) capturePreview() else _state.update { it.copy(preview = null, previewProtected = false) }
+        }
+    }
+
+    fun capturePreview() {
+        if (_state.value.conn != Conn.CONNECTED || _state.value.previewBusy) return
+        _state.update { it.copy(previewBusy = true) }
+        viewModelScope.launch {
+            try {
+                val png = remote.execBytes("screencap -p")
+                val result = withContext(Dispatchers.Default) {
+                    val opts = BitmapFactory.Options().apply { inSampleSize = 4 }
+                    val bmp = BitmapFactory.decodeByteArray(png, 0, png.size, opts) ?: return@withContext null
+                    // Netflix/Prime block screenshots → the picture comes out black.
+                    var sum = 0L
+                    var n = 0
+                    val stepX = (bmp.width / 24).coerceAtLeast(1)
+                    val stepY = (bmp.height / 14).coerceAtLeast(1)
+                    for (y in 0 until bmp.height step stepY) for (x in 0 until bmp.width step stepX) {
+                        val c = bmp.getPixel(x, y)
+                        sum += ((c shr 16) and 255) + ((c shr 8) and 255) + (c and 255)
+                        n++
+                    }
+                    val dark = n > 0 && sum / (n * 3) < 6
+                    bmp.asImageBitmap() to dark
+                }
+                if (result != null) {
+                    _state.update { it.copy(preview = result.first, previewProtected = result.second) }
+                }
+            } catch (_: Throwable) {
+            } finally {
+                _state.update { it.copy(previewBusy = false) }
+            }
+        }
+    }
+
+    /** Play/pause that updates the button straight away, then re-checks the projector. */
+    fun playPause() {
+        val np = _state.value.nowPlaying
+        if (np?.playing != null) {
+            val now = android.os.SystemClock.elapsedRealtime()
+            val pos = np.positionMs?.let { p -> if (np.playing) p + (now - np.fetchedAt) else p }
+            _state.update { it.copy(nowPlaying = np.copy(playing = !np.playing, positionMs = pos, fetchedAt = now)) }
+        }
+        send {
+            remote.key(85)
+            delay(900)
+            refreshNowPlaying()
+        }
+    }
+
+    fun appLabel(pkg: String?): String? =
+        pkg?.let { p -> _state.value.apps.firstOrNull { it.pkg == p }?.label ?: RemoteController.friendlyName(p) }
+
+    fun appIcon(pkg: String?): String? = pkg?.let { p -> _state.value.apps.firstOrNull { it.pkg == p }?.iconUrl }
 
     // ---------- Apps ----------
 
