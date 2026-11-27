@@ -6,4 +6,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl unzip ca-c
  && rm -rf /tmp/pt.zip /var/lib/apt/lists/* \
  && apt-get purge -y curl unzip && apt-get autoremove -y
 COPY projector.py /app/projector.py
+RUN chmod 755 /app && chmod 644 /app/projector.py
 CMD ["python", "-u", "/app/projector.py"]
