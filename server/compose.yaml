@@ -1,0 +1,16 @@
+# Projector bridge — the home server talks to the projector so Claude can control it.
+name: brijendra-projector
+
+services:
+  bridge:
+    build: .
+    image: brijendra-projector-bridge:local
+    restart: unless-stopped
+    network_mode: host            # reaches the projector on the Wi-Fi; API only on 127.0.0.1:9830
+    user: '${LOCAL_UID:-1000}:${LOCAL_GID:-1000}'
+    environment:
+      PROJECTOR_STATE: /state
+      TZ: Asia/Kolkata
+    volumes:
+      - ./state:/state            # adb key + last known projector address
+    security_opt: ['no-new-privileges:true']
